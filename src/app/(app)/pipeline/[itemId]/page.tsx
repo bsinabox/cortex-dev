@@ -7,73 +7,94 @@ import { CollapsibleSection } from '@/components/CollapsibleSection';
 
 export const dynamic = 'force-dynamic';
 
-export default async function ItemDetailPage({
-  params,
-}: {
-  params: Promise<{ itemId: string }>;
-}) {
-  const { itemId } = await params;
+export default async function ItemDetailPage(props: { params: Promise<{ itemId: string }> }) {
+  const { itemId } = await props.params;
   const supabase = await createServerClient();
 
-  const { data: item, error } = await supabase
+  const { data: rawItem, error } = await supabase
     .from('agentic_items')
-    .select('*')
+    .select('id, title, status, priority, repo, current_round, created_at, updated_at, escalated_at, escalation_reason, final_design_summary')
     .eq('id', itemId)
     .single();
 
-  if (error || !item) notFound();
+  if (error || !rawItem) notFound();
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const item = rawItem as any;
 
-  const sid = item.id.substring(0, 8).toUpperCase();
+  const sid = (item.id as string).substring(0, 8).toUpperCase();
   const priority = PRIORITY_CONFIG[item.priority] ?? PRIORITY_CONFIG.p3;
   const repo = REPO_CONFIG[item.repo] ?? { label: item.repo, bg: 'var(--color-stone-100)', text: 'var(--color-stone-600)' };
   const statusLabel = STATUS_LABELS[item.status] ?? item.status;
 
   const [jobsRes, messagesRes, artifactsRes, revisionsRes, workersRes] = await Promise.all([
-    supabase.from('agentic_jobs').select('id, phase, status, round_number, dispatch_key, error_text, output_text, started_at, created_at, completed_at, metadata')
+    supabase.from('agentic_jobs').select('id, phase, status, round_number, error_text, started_at, created_at, completed_at')
       .eq('item_id', itemId).order('round_number', { ascending: true }).order('created_at', { ascending: true }),
     supabase.from('agentic_messages').select('id, author, message_type, content, created_at')
       .eq('item_id', itemId).order('created_at', { ascending: true }),
-    supabase.from('agentic_artifacts').select('id, artifact_type, ref, metadata, created_at')
+    supabase.from('agentic_artifacts').select('id, artifact_type, ref, created_at')
       .eq('item_id', itemId).order('created_at', { ascending: true }),
     supabase.from('agentic_design_revisions').select('id, revision_number, status, scope_summary, created_at')
       .eq('item_id', itemId).order('created_at', { ascending: true }),
-    supabase.from('worker_sessions').select('id, session_number, title, status, worker_model, session_role, duration_minutes, fidelity_score, created_at')
+    supabase.from('worker_sessions').select('id, session_number, title, status, worker_model, fidelity_score, created_at')
       .eq('work_item_id', itemId).order('created_at', { ascending: true }),
   ]);
 
-  const jobs = jobsRes.data ?? [];
-  const messages = messagesRes.data ?? [];
-  const artifacts = artifactsRes.data ?? [];
-  const revisions = revisionsRes.data ?? [];
-  const workers = workersRes.data ?? [];
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const jobs = (jobsRes.data ?? []) as any[];
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const messages = (messagesRes.data ?? []) as any[];
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const artifacts = (artifactsRes.data ?? []) as any[];
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const revisions = (revisionsRes.data ?? []) as any[];
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const workers = (workersRes.data ?? []) as any[];
 
   const hasData = jobs.length + messages.length + revisions.length + artifacts.length + workers.length > 0;
 
-  const bootPrompt = `Boot up conductor item ${sid} for work.
+  const statusHint = item.status === 'awaiting_hub_design'
+    ? '\n   - Begin Phase 1 design session per PHASE1_DESIGN_SESSION.md.'
+    : item.status === 'testing_in_dev'
+      ? '\n   - Summarize what to test and verification steps.'
+      : '\n   - Recommend next action based on current status.';
 
-Steps:
-1. Run mandatory timestamp.
-2. Query live state from Supabase (project ftpbxlizcsbzvmtbtuef):
-   - Item: SELECT * FROM agentic_items WHERE UPPER(LEFT(id::text, 8)) = '${sid}'
-   - Messages: SELECT * FROM agentic_messages WHERE item_id = '${item.id}' ORDER BY created_at
-   - Design revisions: SELECT * FROM agentic_design_revisions WHERE item_id = '${item.id}' ORDER BY created_at
-   - Jobs: SELECT id, phase, status, round_number, error_text, created_at FROM agentic_jobs WHERE item_id = '${item.id}' ORDER BY created_at
-   - Workers: SELECT id, session_number, title, status, worker_model FROM worker_sessions WHERE work_item_id = '${item.id}' ORDER BY created_at
-3. Repo is ${item.repo} — read relevant source from VPS.
-4. Report full context, then:${item.status === 'awaiting_hub_design' ? '\n   - Begin Phase 1 design session per PHASE1_DESIGN_SESSION.md.' : item.status === 'testing_in_dev' ? '\n   - Summarize what to test and verification steps.' : '\n   - Recommend next action based on current status.'}
+  const bootPrompt = [
+    'Boot up conductor item ' + sid + ' for work.',
+    '',
+    'Steps:',
+    '1. Run mandatory timestamp.',
+    '2. Query live state from Supabase (project ftpbxlizcsbzvmtbtuef):',
+    '   - Item: SELECT * FROM agentic_items WHERE UPPER(LEFT(id::text, 8)) = \'' + sid + '\'',
+    '   - Messages, revisions, jobs, workers for item_id = \'' + item.id + '\'',
+    '3. Repo is ' + (item.repo ?? '') + ' — read relevant source from VPS.',
+    '4. Report full context, then:' + statusHint,
+    '',
+    'Begin.',
+  ].join('\n');
 
-Begin.`;
+  const authorColors: Record<string, string> = {
+    human: '#DBEAFE', codex: '#D1FAE5', claude_code: '#F3E8FF',
+    system: '#F5F5F4', 'agentic-conductor': '#FEF3C7', agentic_conductor: '#FEF3C7',
+  };
+
+  const statusColors: Record<string, string> = {
+    queued: '#3B82F6', running: '#10B981', complete: '#10B981', failed: '#EF4444',
+    blocked: '#EF4444', cancelled: '#78716C', skipped: '#78716C', stalled: '#D97706',
+  };
+
+  function truncate(text: string, max: number) {
+    if (!text || text.length <= max) return text || '';
+    return text.substring(0, max) + '…';
+  }
 
   return (
     <div>
-      {/* Breadcrumb */}
       <div className="mb-4 text-sm text-[var(--muted-foreground)]">
         <Link href="/pipeline" className="hover:text-[var(--foreground)]">Pipeline</Link>
         <span className="mx-1.5">/</span>
         <span className="font-mono font-medium text-[var(--foreground)]">{sid}</span>
       </div>
 
-      {/* Header card */}
       <div className="rounded-[10px] border border-[var(--border)] bg-[var(--card)] p-4 sm:p-5">
         <div className="flex flex-wrap items-start justify-between gap-3">
           <div className="min-w-0 flex-1">
@@ -86,180 +107,92 @@ Begin.`;
           </div>
           <span className="rounded-[8px] border border-[var(--border)] px-3 py-1.5 text-xs sm:text-sm font-medium shrink-0">{statusLabel}</span>
         </div>
-
-        <div className="mt-3 flex flex-wrap gap-3 sm:gap-4 text-xs text-[var(--muted-foreground)]">
+        <div className="mt-3 flex flex-wrap gap-3 text-xs text-[var(--muted-foreground)]">
           <span>Created {timeAgo(item.created_at)}</span>
           <span>Updated {timeAgo(item.updated_at)}</span>
           <span>Round {item.current_round}</span>
-          {item.escalated_at && (
-            <span className="font-medium text-amber-600">Escalated: {item.escalation_reason}</span>
-          )}
         </div>
       </div>
 
-      {/* Boot prompt button */}
       <div className="mt-3">
         <CopyPromptButton prompt={bootPrompt} sid={sid} />
       </div>
 
-      {/* Empty state with guidance */}
       {!hasData && (
         <div className="mt-6 rounded-[10px] border border-dashed border-[var(--border)] p-6 text-center">
-          <p className="text-sm font-medium text-[var(--foreground)]">No pipeline activity yet</p>
+          <p className="text-sm font-medium">No pipeline activity yet</p>
           <p className="mt-1 text-xs text-[var(--muted-foreground)]">
-            {item.status === 'awaiting_hub_design'
-              ? 'Copy the boot prompt above and paste it into a new Hub conversation to start the design session.'
-              : 'This item is waiting for upstream work to complete.'}
+            Copy the boot prompt above and paste it into a new Hub conversation to start working on this item.
           </p>
         </div>
       )}
 
-      {/* Content sections */}
       {hasData && (
         <div className="mt-4 space-y-3">
-          {/* Design revisions */}
-          <CollapsibleSection title="Design revisions" count={revisions.length} defaultOpen={revisions.length > 0 && revisions.length <= 3}>
-            {revisions.length === 0 ? <Empty text="No design revisions" /> : (
-              <div className="space-y-2">
-                {revisions.map((rev) => (
-                  <div key={rev.id} className={`rounded-[8px] border px-3 py-2.5 text-sm ${
-                    rev.status === 'current' ? 'border-[var(--primary)] bg-indigo-50 dark:bg-indigo-950' : 'border-[var(--border)] bg-[var(--card)]'
-                  }`}>
-                    <div className="flex items-center justify-between gap-2">
-                      <span className="font-medium">Revision {rev.revision_number}</span>
-                      <span className="text-xs text-[var(--muted-foreground)]">{rev.status} · {timeAgo(rev.created_at)}</span>
-                    </div>
-                    {rev.scope_summary && <ExpandableText text={rev.scope_summary} maxLines={2} />}
-                  </div>
-                ))}
+          <CollapsibleSection title="Design revisions" count={revisions.length} defaultOpen={revisions.length > 0 && revisions.length <= 5}>
+            {revisions.map((rev: any) => (
+              <div key={rev.id} className={`mb-2 rounded-[8px] border px-3 py-2.5 text-sm ${rev.status === 'current' ? 'border-[var(--primary)] bg-indigo-50 dark:bg-indigo-950' : 'border-[var(--border)]'}`}>
+                <div className="flex justify-between"><span className="font-medium">Rev {rev.revision_number}</span><span className="text-xs text-[var(--muted-foreground)]">{rev.status}</span></div>
+                {rev.scope_summary && <p className="mt-1 text-xs text-[var(--muted-foreground)]">{truncate(rev.scope_summary, 300)}</p>}
               </div>
-            )}
+            ))}
+            {revisions.length === 0 && <p className="py-3 text-center text-xs text-[var(--muted-foreground)]">None</p>}
           </CollapsibleSection>
 
-          {/* Jobs */}
-          <CollapsibleSection title="Jobs" count={jobs.length} defaultOpen={jobs.length > 0 && jobs.length <= 5}>
-            {jobs.length === 0 ? <Empty text="No jobs yet" /> : (
-              <div className="space-y-2">
-                {jobs.map((job) => {
-                  const durationMs = job.started_at && job.completed_at
-                    ? new Date(job.completed_at).getTime() - new Date(job.started_at).getTime() : null;
-                  return (
-                    <div key={job.id} className="flex items-start gap-3 rounded-[8px] border border-[var(--border)] bg-[var(--card)] px-3 py-2.5 text-sm">
-                      <StatusDot status={job.status} />
-                      <div className="min-w-0 flex-1">
-                        <div className="flex items-center gap-2">
-                          <span className="font-medium">{job.phase}</span>
-                          <span className="text-xs text-[var(--muted-foreground)]">R{job.round_number}</span>
-                        </div>
-                        {job.error_text && <ExpandableText text={job.error_text} maxLines={2} className="text-red-600 dark:text-red-400" />}
-                        {job.output_text && !job.error_text && <ExpandableText text={job.output_text} maxLines={2} />}
-                      </div>
-                      <span className="shrink-0 text-xs text-[var(--muted-foreground)]">
-                        {durationMs ? `${(durationMs / 1000).toFixed(1)}s` : timeAgo(job.created_at)}
-                      </span>
-                    </div>
-                  );
-                })}
+          <CollapsibleSection title="Jobs" count={jobs.length} defaultOpen={jobs.length > 0 && jobs.length <= 8}>
+            {jobs.map((job: any) => (
+              <div key={job.id} className="mb-2 flex items-start gap-2 rounded-[8px] border border-[var(--border)] px-3 py-2 text-sm">
+                <span className="mt-1 inline-block h-2.5 w-2.5 shrink-0 rounded-full" style={{ background: statusColors[job.status] ?? '#78716C' }} />
+                <div className="min-w-0 flex-1">
+                  <span className="font-medium">{job.phase}</span>
+                  <span className="ml-2 text-xs text-[var(--muted-foreground)]">R{job.round_number}</span>
+                  {job.error_text && <p className="mt-0.5 text-xs text-red-500">{truncate(job.error_text, 200)}</p>}
+                </div>
+                <span className="shrink-0 text-xs text-[var(--muted-foreground)]">{timeAgo(job.created_at)}</span>
               </div>
-            )}
+            ))}
+            {jobs.length === 0 && <p className="py-3 text-center text-xs text-[var(--muted-foreground)]">None</p>}
           </CollapsibleSection>
 
-          {/* Messages */}
           <CollapsibleSection title="Messages" count={messages.length} defaultOpen={messages.length > 0 && messages.length <= 5}>
-            {messages.length === 0 ? <Empty text="No messages" /> : (
-              <div className="space-y-2">
-                {messages.map((msg) => (
-                  <div key={msg.id} className="rounded-[8px] border border-[var(--border)] bg-[var(--card)] px-3 py-2.5 text-sm">
-                    <div className="flex items-center gap-2">
-                      <AuthorBadge author={msg.author} />
-                      <span className="text-[10px] uppercase text-[var(--muted-foreground)]">{msg.message_type}</span>
-                      <span className="ml-auto text-xs text-[var(--muted-foreground)]">{timeAgo(msg.created_at)}</span>
-                    </div>
-                    <ExpandableText
-                      text={typeof msg.content === 'string' ? msg.content : JSON.stringify(msg.content)}
-                      maxLines={3}
-                    />
-                  </div>
-                ))}
+            {messages.map((msg: any) => (
+              <div key={msg.id} className="mb-2 rounded-[8px] border border-[var(--border)] px-3 py-2.5 text-sm">
+                <div className="flex items-center gap-2">
+                  <span className="rounded-[6px] px-1.5 py-0.5 text-[10px] font-medium" style={{ background: authorColors[msg.author] ?? '#F5F5F4', color: '#292524' }}>{msg.author}</span>
+                  <span className="text-[10px] uppercase text-[var(--muted-foreground)]">{msg.message_type}</span>
+                  <span className="ml-auto text-xs text-[var(--muted-foreground)]">{timeAgo(msg.created_at)}</span>
+                </div>
+                <p className="mt-1.5 whitespace-pre-wrap text-xs leading-relaxed text-[var(--muted-foreground)]">
+                  {truncate(typeof msg.content === 'string' ? msg.content : JSON.stringify(msg.content), 500)}
+                </p>
               </div>
-            )}
+            ))}
+            {messages.length === 0 && <p className="py-3 text-center text-xs text-[var(--muted-foreground)]">None</p>}
           </CollapsibleSection>
 
-          {/* Artifacts */}
           <CollapsibleSection title="Artifacts" count={artifacts.length} defaultOpen={artifacts.length > 0}>
-            {artifacts.length === 0 ? <Empty text="No artifacts" /> : (
-              <div className="space-y-2">
-                {artifacts.map((art) => (
-                  <div key={art.id} className="flex items-center gap-3 rounded-[8px] border border-[var(--border)] bg-[var(--card)] px-3 py-2.5 text-sm">
-                    <span className="font-medium">{art.artifact_type}</span>
-                    <span className="min-w-0 flex-1 truncate text-xs text-[var(--muted-foreground)]">{art.ref}</span>
-                    <span className="shrink-0 text-xs text-[var(--muted-foreground)]">{timeAgo(art.created_at)}</span>
-                  </div>
-                ))}
+            {artifacts.map((art: any) => (
+              <div key={art.id} className="mb-2 flex items-center gap-3 rounded-[8px] border border-[var(--border)] px-3 py-2.5 text-sm">
+                <span className="font-medium">{art.artifact_type}</span>
+                <span className="min-w-0 flex-1 truncate text-xs text-[var(--muted-foreground)]">{art.ref}</span>
               </div>
-            )}
+            ))}
+            {artifacts.length === 0 && <p className="py-3 text-center text-xs text-[var(--muted-foreground)]">None</p>}
           </CollapsibleSection>
 
-          {/* Worker sessions */}
-          <CollapsibleSection title="Worker sessions" count={workers.length} defaultOpen={workers.length > 0 && workers.length <= 5}>
-            {workers.length === 0 ? <Empty text="No worker sessions" /> : (
-              <div className="space-y-2">
-                {workers.map((w) => (
-                  <Link key={w.id} href={`/workers/${w.id}`} className="flex items-center gap-3 rounded-[8px] border border-[var(--border)] bg-[var(--card)] px-3 py-2.5 text-sm transition-colors hover:border-[var(--primary)]">
-                    <StatusDot status={w.status} />
-                    <span className="font-mono text-xs font-medium">#{w.session_number}</span>
-                    <span className="min-w-0 flex-1 truncate">{w.title}</span>
-                    <span className="text-xs text-[var(--muted-foreground)]">{w.worker_model}</span>
-                    {w.fidelity_score != null && <span className="text-xs font-medium text-emerald-600">{w.fidelity_score}%</span>}
-                  </Link>
-                ))}
-              </div>
-            )}
+          <CollapsibleSection title="Workers" count={workers.length} defaultOpen={workers.length > 0 && workers.length <= 5}>
+            {workers.map((w: any) => (
+              <Link key={w.id} href={'/workers/' + w.id} className="mb-2 flex items-center gap-3 rounded-[8px] border border-[var(--border)] px-3 py-2.5 text-sm hover:border-[var(--primary)]">
+                <span className="inline-block h-2.5 w-2.5 shrink-0 rounded-full" style={{ background: statusColors[w.status] ?? '#78716C' }} />
+                <span className="font-mono text-xs">#{w.session_number}</span>
+                <span className="min-w-0 flex-1 truncate">{w.title}</span>
+                <span className="text-xs text-[var(--muted-foreground)]">{w.worker_model}</span>
+              </Link>
+            ))}
+            {workers.length === 0 && <p className="py-3 text-center text-xs text-[var(--muted-foreground)]">None</p>}
           </CollapsibleSection>
         </div>
       )}
     </div>
-  );
-}
-
-function Empty({ text }: { text: string }) {
-  return <div className="rounded-[8px] border border-dashed border-[var(--border)] py-4 text-center text-xs text-[var(--muted-foreground)]">{text}</div>;
-}
-
-function ExpandableText({ text, maxLines = 3, className = '' }: { text: string; maxLines?: number; className?: string }) {
-  const preview = text.length > maxLines * 80 ? text.substring(0, maxLines * 80) : text;
-  const needsExpand = text.length > maxLines * 80;
-
-  if (!needsExpand) {
-    return <p className={`mt-1.5 whitespace-pre-wrap text-xs leading-relaxed ${className || 'text-[var(--muted-foreground)]'}`}>{text}</p>;
-  }
-
-  return (
-    <details className="group mt-1.5">
-      <summary className={`cursor-pointer list-none whitespace-pre-wrap text-xs leading-relaxed ${className || 'text-[var(--muted-foreground)]'}`}>
-        <span className="group-open:hidden">{preview}… <span className="text-[var(--primary)]">Show more</span></span>
-        <span className="hidden group-open:inline">{text} <span className="text-[var(--primary)]">Show less</span></span>
-      </summary>
-    </details>
-  );
-}
-
-function StatusDot({ status }: { status: string }) {
-  const colors: Record<string, string> = { queued: '#3B82F6', running: '#10B981', complete: '#10B981', failed: '#EF4444', blocked: '#EF4444', cancelled: '#78716C', skipped: '#78716C', stalled: '#D97706' };
-  const isRunning = status === 'running';
-  return (
-    <span className="relative flex h-2.5 w-2.5 shrink-0">
-      {isRunning && <span className="absolute inline-flex h-full w-full animate-ping rounded-full opacity-75" style={{ background: colors[status] ?? '#78716C' }} />}
-      <span className="relative inline-flex h-2.5 w-2.5 rounded-full" style={{ background: colors[status] ?? '#78716C' }} />
-    </span>
-  );
-}
-
-function AuthorBadge({ author }: { author: string }) {
-  const colors: Record<string, string> = { human: '#DBEAFE', codex: '#D1FAE5', claude_code: '#F3E8FF', system: 'var(--color-stone-100)', 'agentic-conductor': '#FEF3C7', agentic_conductor: '#FEF3C7' };
-  return (
-    <span className="inline-flex rounded-[6px] px-1.5 py-0.5 text-[10px] font-medium" style={{ background: colors[author] ?? 'var(--color-stone-100)', color: 'var(--color-stone-800)' }}>
-      {author}
-    </span>
   );
 }
