@@ -4,8 +4,44 @@ import { createServerClient } from '@/lib/supabase/server';
 import { STATUS_LABELS, PRIORITY_CONFIG, REPO_CONFIG, timeAgo } from '@/lib/constants';
 import { CopyPromptButton } from '@/components/CopyPromptButton';
 import { CollapsibleSection } from '@/components/CollapsibleSection';
+import { MessageCard } from '@/components/MessageCard';
 
 export const dynamic = 'force-dynamic';
+
+/* ── scope_summary jsonb → readable pills ───────────────────────── */
+
+type ScopeField = { label: string; value: string };
+
+const SCOPE_KEYS: Record<string, string> = {
+  risk: 'Risk', type: 'Type', complexity: 'Complexity',
+  surfaces: 'Surfaces', routes: 'Routes', tables: 'Tables',
+  components: 'Components', apis: 'APIs', tests: 'Tests',
+  scope_refs: 'Refs', files_changed: 'Files',
+};
+
+function parseScopeSummary(raw: unknown): ScopeField[] {
+  if (!raw || typeof raw !== 'object') return [];
+  const obj = raw as Record<string, unknown>;
+  const fields: ScopeField[] = [];
+  for (const [key, label] of Object.entries(SCOPE_KEYS)) {
+    const val = obj[key];
+    if (val === undefined || val === null) continue;
+    if (Array.isArray(val)) {
+      if (val.length === 0) continue;
+      // Show count for arrays > 3, else join short values
+      if (val.length <= 3 && val.every((v: unknown) => typeof v === 'string' && v.length < 30)) {
+        fields.push({ label, value: val.join(', ') });
+      } else {
+        fields.push({ label, value: `${val.length}` });
+      }
+    } else if (typeof val === 'string') {
+      fields.push({ label, value: val });
+    }
+  }
+  return fields;
+}
+
+/* ── page ────────────────────────────────────────────────────────── */
 
 export default async function ItemDetailPage(props: { params: Promise<{ itemId: string }> }) {
   const { itemId } = await props.params;
@@ -46,32 +82,36 @@ export default async function ItemDetailPage(props: { params: Promise<{ itemId: 
       ? j.error_text.substring(0, 300) + '…'
       : j.error_text ?? null,
   }));
+
+  // Messages: increase truncation to 2000 chars for smart summary extraction
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const messages = ((messagesRes.data ?? []) as any[]).map((m: any) => ({
     ...m,
-    content: typeof m.content === 'string' && m.content.length > 500
-      ? m.content.substring(0, 500) + '…'
+    content: typeof m.content === 'string' && m.content.length > 2000
+      ? m.content.substring(0, 2000) + '…'
       : m.content ?? '',
   }));
+
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const artifacts = (artifactsRes.data ?? []) as any[];
+
+  // Revisions: keep scope_summary as object for parsed rendering
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const revisions = ((revisionsRes.data ?? []) as any[]).map((r: any) => ({
     ...r,
-    scope_summary: r.scope_summary
-      ? typeof r.scope_summary === 'string' ? r.scope_summary : JSON.stringify(r.scope_summary)
-      : null,
+    scopeFields: parseScopeSummary(r.scope_summary),
   }));
+
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const workers = (workersRes.data ?? []) as any[];
 
   const hasData = jobs.length + messages.length + revisions.length + artifacts.length + workers.length > 0;
 
   const statusHint = item.status === 'awaiting_hub_design'
-    ? '\n   - Begin Phase 1 design session per PHASE1_DESIGN_SESSION.md.'
+    ? '\\n   - Begin Phase 1 design session per PHASE1_DESIGN_SESSION.md.'
     : item.status === 'testing_in_dev'
-      ? '\n   - Summarize what to test and verification steps.'
-      : '\n   - Recommend next action based on current status.';
+      ? '\\n   - Summarize what to test and verification steps.'
+      : '\\n   - Recommend next action based on current status.';
 
   const bootPrompt = [
     'Boot up conductor item ' + sid + ' for work.',
@@ -85,24 +125,17 @@ export default async function ItemDetailPage(props: { params: Promise<{ itemId: 
     '4. Report full context, then:' + statusHint,
     '',
     'Begin.',
-  ].join('\n');
+  ].join('\\n');
 
-  const authorColors: Record<string, string> = {
-    human: '#DBEAFE', codex: '#D1FAE5', claude_code: '#F3E8FF',
-    system: '#F5F5F4', 'agentic-conductor': '#FEF3C7', agentic_conductor: '#FEF3C7',
-  };
-
-  const statusColors: Record<string, string> = {
+  const statusDot: Record<string, string> = {
     queued: '#3B82F6', running: '#10B981', complete: '#10B981', failed: '#EF4444',
     blocked: '#EF4444', cancelled: '#78716C', skipped: '#78716C', stalled: '#D97706',
   };
 
-  function truncate(val: unknown, max: number): string {
-    if (!val) return '';
-    const text = typeof val === 'string' ? val : JSON.stringify(val);
-    if (text.length <= max) return text;
-    return text.substring(0, max) + '…';
-  }
+  const jobStatusLabel: Record<string, string> = {
+    queued: 'Queued', running: 'Running', complete: 'Complete', failed: 'Failed',
+    blocked: 'Blocked', cancelled: 'Cancelled', skipped: 'Skipped', stalled: 'Stalled',
+  };
 
   return (
     <div>
@@ -146,48 +179,82 @@ export default async function ItemDetailPage(props: { params: Promise<{ itemId: 
 
       {hasData && (
         <div className="mt-4 space-y-3">
+
+          {/* ── Design Revisions ── */}
           <CollapsibleSection title="Design revisions" count={revisions.length} defaultOpen={revisions.length > 0 && revisions.length <= 5}>
-            {revisions.map((rev: any) => (
+            {revisions.map((rev: { id: string; revision_number: number; status: string; scopeFields: ScopeField[]; created_at: string }) => (
               <div key={rev.id} className={`mb-2 rounded-[8px] border px-3 py-2.5 text-sm ${rev.status === 'current' ? 'border-[var(--primary)] bg-indigo-50 dark:bg-indigo-950' : 'border-[var(--border)]'}`}>
-                <div className="flex justify-between"><span className="font-medium">Rev {rev.revision_number}</span><span className="text-xs text-[var(--muted-foreground)]">{rev.status}</span></div>
-                {rev.scope_summary && <p className="mt-1 text-xs text-[var(--muted-foreground)]">{truncate(rev.scope_summary, 300)}</p>}
+                <div className="flex items-center justify-between">
+                  <div className="flex items-center gap-2">
+                    <span className="font-medium">Rev {rev.revision_number}</span>
+                    <span className={`rounded-[6px] px-1.5 py-0.5 text-[10px] font-medium ${
+                      rev.status === 'current'
+                        ? 'bg-emerald-100 text-emerald-700 dark:bg-emerald-900 dark:text-emerald-300'
+                        : 'bg-[var(--muted)] text-[var(--muted-foreground)]'
+                    }`}>
+                      {rev.status}
+                    </span>
+                  </div>
+                  <span className="text-[10px] text-[var(--muted-foreground)]">{timeAgo(rev.created_at)}</span>
+                </div>
+                {rev.scopeFields.length > 0 && (
+                  <div className="mt-1.5 flex flex-wrap gap-1.5">
+                    {rev.scopeFields.map((f) => (
+                      <span key={f.label} className="inline-flex items-center gap-1 rounded-[5px] bg-[var(--muted)] px-1.5 py-0.5 text-[10px] text-[var(--muted-foreground)]">
+                        <span className="font-medium">{f.label}</span>
+                        <span>{f.value}</span>
+                      </span>
+                    ))}
+                  </div>
+                )}
               </div>
             ))}
             {revisions.length === 0 && <p className="py-3 text-center text-xs text-[var(--muted-foreground)]">None</p>}
           </CollapsibleSection>
 
+          {/* ── Jobs ── */}
           <CollapsibleSection title="Jobs" count={jobs.length} defaultOpen={jobs.length > 0 && jobs.length <= 8}>
+            {/* eslint-disable-next-line @typescript-eslint/no-explicit-any */}
             {jobs.map((job: any) => (
               <div key={job.id} className="mb-2 flex items-start gap-2 rounded-[8px] border border-[var(--border)] px-3 py-2 text-sm">
-                <span className="mt-1 inline-block h-2.5 w-2.5 shrink-0 rounded-full" style={{ background: statusColors[job.status] ?? '#78716C' }} />
+                <span className="mt-1.5 inline-block h-2.5 w-2.5 shrink-0 rounded-full" style={{ background: statusDot[job.status] ?? '#78716C' }} />
                 <div className="min-w-0 flex-1">
-                  <span className="font-medium">{job.phase}</span>
-                  <span className="ml-2 text-xs text-[var(--muted-foreground)]">R{job.round_number}</span>
-                  {job.error_text && <p className="mt-0.5 text-xs text-red-500">{truncate(job.error_text, 200)}</p>}
+                  <div className="flex items-center gap-2">
+                    <span className="font-medium">{job.phase}</span>
+                    <span className="text-[10px] text-[var(--muted-foreground)]">
+                      R{job.round_number} · {jobStatusLabel[job.status] ?? job.status}
+                    </span>
+                  </div>
+                  {job.error_text && (
+                    <p className="mt-0.5 rounded-[4px] bg-red-50 dark:bg-red-950 px-1.5 py-1 text-[10px] text-red-600 dark:text-red-400 leading-relaxed">
+                      {job.error_text}
+                    </p>
+                  )}
                 </div>
-                <span className="shrink-0 text-xs text-[var(--muted-foreground)]">{timeAgo(job.created_at)}</span>
+                <span className="shrink-0 text-[10px] text-[var(--muted-foreground)]">{timeAgo(job.created_at)}</span>
               </div>
             ))}
             {jobs.length === 0 && <p className="py-3 text-center text-xs text-[var(--muted-foreground)]">None</p>}
           </CollapsibleSection>
 
+          {/* ── Messages ── */}
           <CollapsibleSection title="Messages" count={messages.length} defaultOpen={messages.length > 0 && messages.length <= 5}>
+            {/* eslint-disable-next-line @typescript-eslint/no-explicit-any */}
             {messages.map((msg: any) => (
-              <div key={msg.id} className="mb-2 rounded-[8px] border border-[var(--border)] px-3 py-2.5 text-sm">
-                <div className="flex items-center gap-2">
-                  <span className="rounded-[6px] px-1.5 py-0.5 text-[10px] font-medium" style={{ background: authorColors[msg.author] ?? '#F5F5F4', color: '#292524' }}>{msg.author}</span>
-                  <span className="text-[10px] uppercase text-[var(--muted-foreground)]">{msg.message_type}</span>
-                  <span className="ml-auto text-xs text-[var(--muted-foreground)]">{timeAgo(msg.created_at)}</span>
-                </div>
-                <p className="mt-1.5 whitespace-pre-wrap text-xs leading-relaxed text-[var(--muted-foreground)]">
-                  {truncate(typeof msg.content === 'string' ? msg.content : JSON.stringify(msg.content), 500)}
-                </p>
-              </div>
+              <MessageCard
+                key={msg.id}
+                author={msg.author}
+                messageType={msg.message_type}
+                content={typeof msg.content === 'string' ? msg.content : JSON.stringify(msg.content)}
+                createdAt={msg.created_at}
+              />
             ))}
             {messages.length === 0 && <p className="py-3 text-center text-xs text-[var(--muted-foreground)]">None</p>}
           </CollapsibleSection>
 
+          {/* ── Artifacts ── */}
           <CollapsibleSection title="Artifacts" count={artifacts.length} defaultOpen={artifacts.length > 0}>
+            {/* eslint-disable-next-line @typescript-eslint/no-explicit-any */}
             {artifacts.map((art: any) => (
               <div key={art.id} className="mb-2 flex items-center gap-3 rounded-[8px] border border-[var(--border)] px-3 py-2.5 text-sm">
                 <span className="font-medium">{art.artifact_type}</span>
@@ -197,10 +264,12 @@ export default async function ItemDetailPage(props: { params: Promise<{ itemId: 
             {artifacts.length === 0 && <p className="py-3 text-center text-xs text-[var(--muted-foreground)]">None</p>}
           </CollapsibleSection>
 
+          {/* ── Workers ── */}
           <CollapsibleSection title="Workers" count={workers.length} defaultOpen={workers.length > 0 && workers.length <= 5}>
+            {/* eslint-disable-next-line @typescript-eslint/no-explicit-any */}
             {workers.map((w: any) => (
               <Link key={w.id} href={'/workers/' + w.id} className="mb-2 flex items-center gap-3 rounded-[8px] border border-[var(--border)] px-3 py-2.5 text-sm hover:border-[var(--primary)]">
-                <span className="inline-block h-2.5 w-2.5 shrink-0 rounded-full" style={{ background: statusColors[w.status] ?? '#78716C' }} />
+                <span className="inline-block h-2.5 w-2.5 shrink-0 rounded-full" style={{ background: statusDot[w.status] ?? '#78716C' }} />
                 <span className="font-mono text-xs">#{w.session_number}</span>
                 <span className="min-w-0 flex-1 truncate">{w.title}</span>
                 <span className="text-xs text-[var(--muted-foreground)]">{w.worker_model}</span>
@@ -208,6 +277,7 @@ export default async function ItemDetailPage(props: { params: Promise<{ itemId: 
             ))}
             {workers.length === 0 && <p className="py-3 text-center text-xs text-[var(--muted-foreground)]">None</p>}
           </CollapsibleSection>
+
         </div>
       )}
     </div>
