@@ -3,7 +3,7 @@ import type { NextConfig } from 'next';
 const csp = [
   "default-src 'self'",
   "connect-src 'self' https://ftpbxlizcsbzvmtbtuef.supabase.co wss://ftpbxlizcsbzvmtbtuef.supabase.co",
-  "script-src 'self' 'unsafe-inline' 'unsafe-eval'",
+  "script-src 'self' 'unsafe-inline'",
   "style-src 'self' 'unsafe-inline' https://fonts.googleapis.com",
   "img-src 'self' data:",
   "font-src 'self' https://fonts.gstatic.com",

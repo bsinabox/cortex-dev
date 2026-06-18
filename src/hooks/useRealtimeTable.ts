@@ -47,10 +47,18 @@ export function useRealtimeTable<T extends Record<string, unknown>>(
             switch (payload.eventType) {
               case 'INSERT':
                 return [...prev, newRow as T];
-              case 'UPDATE':
-                return prev.map((row) =>
-                  row[keyField] === newRow[keyField] ? (newRow as T) : row
+              case 'UPDATE': {
+                const exists = prev.some(
+                  (row) => row[keyField] === newRow[keyField]
                 );
+                if (exists) {
+                  return prev.map((row) =>
+                    row[keyField] === newRow[keyField] ? (newRow as T) : row
+                  );
+                }
+                // Row transitioned into a matching state — treat as INSERT
+                return [...prev, newRow as T];
+              }
               case 'DELETE':
                 return prev.filter(
                   (row) => row[keyField] !== oldRow[keyField]

@@ -1,4 +1,5 @@
 import { createServerClient } from '@/lib/supabase/server';
+import { HUMAN_GATE_STATUSES } from '@/lib/constants';
 import { ApprovalsBoard } from './ApprovalsBoard';
 
 export const dynamic = 'force-dynamic';
@@ -9,14 +10,14 @@ export default async function ApprovalsPage() {
   const { data, error } = await supabase
     .from('agentic_items')
     .select('id, title, status, priority, repo, updated_at, escalated_at, escalation_reason, final_design_summary')
-    .in('status', ['human_review', 'testing_in_dev', 'design_review_hold', 'promotion_review'])
+    .in('status', HUMAN_GATE_STATUSES as unknown as string[])
     .order('updated_at', { ascending: true });
 
   if (error) {
     return (
       <div>
         <h1 className="text-2xl font-semibold tracking-tight">Approvals</h1>
-        <div className="mt-6 rounded-[10px] border border-red-200 bg-red-50 p-4 text-sm text-red-700">
+        <div className="mt-6 rounded-[10px] border border-red-200 bg-red-50 p-4 text-sm text-red-700 dark:border-red-800 dark:bg-red-950 dark:text-red-300">
           <p className="font-medium">Failed to load approval items</p>
           <p className="mt-1 font-mono text-xs">{error.message}</p>
         </div>

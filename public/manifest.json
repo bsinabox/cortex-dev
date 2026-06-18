@@ -5,7 +5,7 @@
   "start_url": "/pipeline",
   "display": "standalone",
   "background_color": "#ffffff",
-  "theme_color": "#1e1b4b",
+  "theme_color": "#4F46E5",
   "orientation": "any",
   "icons": [
     {

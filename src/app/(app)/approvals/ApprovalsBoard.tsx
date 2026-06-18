@@ -8,7 +8,7 @@ import {
   PRIORITY_CONFIG,
   REPO_CONFIG,
   HUMAN_GATE_STATUSES,
-  timeAgo,
+
 } from '@/lib/constants';
 import { approveItem, requestChanges } from '@/app/(app)/pipeline/actions';
 
@@ -23,6 +23,13 @@ type ApprovalItem = {
   escalation_reason: string | null;
   final_design_summary: string | null;
 };
+
+// Statuses where "Request changes" is a valid action
+const CHANGE_REQUESTABLE: string[] = [
+  'human_review',
+  'design_review_hold',
+  'testing_in_dev',
+];
 
 interface ApprovalsBoardProps {
   initialItems: ApprovalItem[];
@@ -52,7 +59,7 @@ export function ApprovalsBoard({ initialItems }: ApprovalsBoardProps) {
   if (items.length === 0) {
     return (
       <div className="mt-12 text-center">
-        <div className="mx-auto flex h-12 w-12 items-center justify-center rounded-full bg-emerald-50 text-emerald-500">
+        <div className="mx-auto flex h-12 w-12 items-center justify-center rounded-full bg-emerald-50 text-emerald-500 dark:bg-emerald-950 dark:text-emerald-400">
           <svg className="h-6 w-6" fill="none" viewBox="0 0 24 24" strokeWidth={1.5} stroke="currentColor">
             <path strokeLinecap="round" strokeLinejoin="round" d="M9 12.75 11.25 15 15 9.75M21 12a9 9 0 1 1-18 0 9 9 0 0 1 18 0Z" />
           </svg>
@@ -87,6 +94,8 @@ function ApprovalCard({ item }: { item: ApprovalItem }) {
 
   const hoursWaiting = (Date.now() - new Date(item.updated_at).getTime()) / 3600000;
   const urgencyColor = hoursWaiting > 4 ? 'text-red-500' : hoursWaiting > 1 ? 'text-amber-500' : 'text-emerald-500';
+
+  const canRequestChanges = CHANGE_REQUESTABLE.includes(item.status);
 
   const statusDescription: Record<string, string> = {
     human_review: 'Needs design review',
@@ -166,8 +175,8 @@ function ApprovalCard({ item }: { item: ApprovalItem }) {
       {result && (
         <div className={`mt-3 rounded-[8px] p-2 text-xs ${
           result.ok
-            ? 'border border-emerald-200 bg-emerald-50 text-emerald-700'
-            : 'border border-red-200 bg-red-50 text-red-700'
+            ? 'border border-emerald-200 bg-emerald-50 text-emerald-700 dark:border-emerald-800 dark:bg-emerald-950 dark:text-emerald-300'
+            : 'border border-red-200 bg-red-50 text-red-700 dark:border-red-800 dark:bg-red-950 dark:text-red-300'
         }`}>
           {result.ok ? 'Action completed successfully' : result.error}
         </div>
@@ -211,12 +220,14 @@ function ApprovalCard({ item }: { item: ApprovalItem }) {
           >
             {isApproving ? 'Approving...' : 'Approve'}
           </button>
-          <button
-            onClick={() => setShowFeedback(true)}
-            className="rounded-[8px] bg-amber-500 px-4 py-1.5 text-xs font-medium text-white transition-colors hover:bg-amber-600"
-          >
-            Request changes
-          </button>
+          {canRequestChanges && (
+            <button
+              onClick={() => setShowFeedback(true)}
+              className="rounded-[8px] bg-amber-500 px-4 py-1.5 text-xs font-medium text-white transition-colors hover:bg-amber-600"
+            >
+              Request changes
+            </button>
+          )}
           <Link
             href={`/pipeline/${item.id}`}
             className="rounded-[8px] border border-[var(--border)] px-4 py-1.5 text-xs text-[var(--muted-foreground)] transition-colors hover:bg-[var(--muted)]"

@@ -2,7 +2,6 @@
 
 import Link from 'next/link';
 import {
-  STATUS_LABELS,
   PRIORITY_CONFIG,
   REPO_CONFIG,
   timeAgo,

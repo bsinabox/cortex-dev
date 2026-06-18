@@ -73,12 +73,16 @@ export async function approveItem(itemId: string): Promise<ActionResult> {
   }
 
   // Log approval message
-  await supabase.from('agentic_messages').insert({
+  const { error: msgErr } = await supabase.from('agentic_messages').insert({
     item_id: itemId,
     author: 'human',
     message_type: 'approval',
     content: `Approved via Cortex Dev (${row.status} → ${targetStatus})`,
   } as Record<string, unknown>);
+
+  if (msgErr) {
+    console.error('[approveItem] Message insert failed:', msgErr.message);
+  }
 
   revalidatePath('/pipeline');
   revalidatePath('/approvals');
@@ -119,24 +123,29 @@ export async function requestChanges(itemId: string, feedback: string): Promise<
       return { ok: false, error: `Cannot request changes on status: ${row.status}` };
   }
 
-  const { data: updated } = await supabase
+  const { data: updated, error: updateErr } = await supabase
     .from('agentic_items')
     .update({ status: targetStatus } as Record<string, unknown>)
     .eq('id', itemId)
     .select('id');
 
+  if (updateErr) return { ok: false, error: updateErr.message };
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   if (!updated || (updated as any[]).length === 0) {
     return { ok: false, error: `Transition ${row.status} → ${targetStatus} rejected` };
   }
 
   // Log feedback message
-  await supabase.from('agentic_messages').insert({
+  const { error: msgErr } = await supabase.from('agentic_messages').insert({
     item_id: itemId,
     author: 'human',
     message_type: 'design',
     content: `Changes requested via Cortex Dev:\n\n${feedback}`,
   } as Record<string, unknown>);
+
+  if (msgErr) {
+    console.error('[requestChanges] Message insert failed:', msgErr.message);
+  }
 
   revalidatePath('/pipeline');
   revalidatePath('/approvals');
@@ -151,7 +160,7 @@ export async function cancelItem(itemId: string, reason: string): Promise<Action
 
   const supabase = await createServiceClient();
 
-  const { data: updated } = await supabase
+  const { data: updated, error: updateErr } = await supabase
     .from('agentic_items')
     .update({
       status: 'cancelled',
@@ -161,6 +170,7 @@ export async function cancelItem(itemId: string, reason: string): Promise<Action
     .eq('id', itemId)
     .select('id');
 
+  if (updateErr) return { ok: false, error: updateErr.message };
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   if (!updated || (updated as any[]).length === 0) {
     return { ok: false, error: 'Cancel transition rejected' };
@@ -179,12 +189,13 @@ export async function retryJob(jobId: string): Promise<ActionResult> {
 
   const supabase = await createServiceClient();
 
-  const { data: updated } = await supabase
+  const { data: updated, error: updateErr } = await supabase
     .from('agentic_jobs')
     .update({ status: 'queued' } as Record<string, unknown>)
     .eq('id', jobId)
     .select('id');
 
+  if (updateErr) return { ok: false, error: updateErr.message };
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   if (!updated || (updated as any[]).length === 0) {
     return { ok: false, error: 'Job retry transition rejected' };
