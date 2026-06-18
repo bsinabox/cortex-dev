@@ -19,17 +19,16 @@ export default async function HealthPage() {
 
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const configRows = ((config as any[]) ?? []).map((row: any) => ({
-    id: row.key as string,
     key: row.key as string,
     value: row.value,
     updated_at: row.updated_at as string,
   }));
 
-  // Fetch ops log (last 24h)
+  // Fetch ops log (last 24h) — uses correct column names: kind, title, detail
   const oneDayAgo = new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString();
   const { data: opsLog } = await serviceClient
     .from('agentic_ops_log')
-    .select('id, event_type, severity, description, status, item_id, created_at')
+    .select('id, kind, severity, title, detail, status, item_id, created_at')
     .gte('created_at', oneDayAgo)
     .order('created_at', { ascending: false })
     .limit(50);
@@ -37,9 +36,10 @@ export default async function HealthPage() {
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const opsLogEntries = ((opsLog as any[]) ?? []).map((row: any) => ({
     id: row.id as string,
-    event_type: (row.event_type ?? '') as string,
+    kind: (row.kind ?? '') as string,
     severity: (row.severity ?? 'info') as string,
-    description: (row.description ?? '') as string,
+    title: (row.title ?? '') as string,
+    detail: (row.detail ?? null) as string | null,
     status: (row.status ?? 'open') as string,
     item_id: (row.item_id ?? null) as string | null,
     created_at: (row.created_at ?? new Date().toISOString()) as string,

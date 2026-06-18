@@ -17,7 +17,6 @@ export async function executeVpsCommand(
   workingDirectory: string = '/root/repos/bs-box-web',
   timeoutSeconds: number = 30
 ): Promise<VpsCommandResult> {
-  // Auth check — operator only
   const authClient = await createServerClient();
   const { data: { user } } = await authClient.auth.getUser();
   if (!user || !isOperator(user.id)) {
@@ -27,7 +26,6 @@ export async function executeVpsCommand(
   const supabase = await createServiceClient();
   const commandId = `cmd_cortex_${Date.now().toString(36)}`;
 
-  // INSERT command
   const { error: insertErr } = await supabase
     .from('vps_commands')
     .insert({
@@ -44,7 +42,6 @@ export async function executeVpsCommand(
     return { ok: false, error: `Insert failed: ${insertErr.message}` };
   }
 
-  // Poll for result — up to 15 seconds
   for (let attempt = 0; attempt < 5; attempt++) {
     await new Promise((r) => setTimeout(r, 3000));
 
@@ -55,7 +52,6 @@ export async function executeVpsCommand(
       .single();
 
     if (readErr || !data) continue;
-
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     const row = data as any;
 
@@ -92,7 +88,7 @@ export async function getOpsLog(): Promise<Array<Record<string, unknown>>> {
 
   const { data } = await supabase
     .from('agentic_ops_log')
-    .select('id, event_type, severity, description, status, item_id, created_at')
+    .select('id, kind, severity, title, detail, status, item_id, created_at')
     .gte('created_at', oneDayAgo)
     .order('created_at', { ascending: false })
     .limit(50);

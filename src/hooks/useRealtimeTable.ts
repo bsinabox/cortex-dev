@@ -12,13 +12,15 @@ function getClient() {
   return sharedClient;
 }
 
-export function useRealtimeTable<T extends { id: string }>(
+export function useRealtimeTable<T extends Record<string, unknown>>(
   table: string,
   initialData: T[],
-  filter?: string
+  filter?: string,
+  idField: string = 'id'
 ) {
   const [data, setData] = useState<T[]>(initialData);
   const clientRef = useRef(getClient());
+  const idFieldRef = useRef(idField);
 
   // Reset data when initialData changes (e.g. filter change from server)
   useEffect(() => {
@@ -27,6 +29,7 @@ export function useRealtimeTable<T extends { id: string }>(
 
   useEffect(() => {
     const supabase = clientRef.current;
+    const keyField = idFieldRef.current;
     const channel = supabase
       .channel(`${table}-realtime`)
       .on(
@@ -39,16 +42,18 @@ export function useRealtimeTable<T extends { id: string }>(
         },
         (payload) => {
           setData((prev) => {
+            const newRow = payload.new as Record<string, unknown>;
+            const oldRow = payload.old as Record<string, unknown>;
             switch (payload.eventType) {
               case 'INSERT':
-                return [...prev, payload.new as T];
+                return [...prev, newRow as T];
               case 'UPDATE':
                 return prev.map((row) =>
-                  row.id === (payload.new as T).id ? (payload.new as T) : row
+                  row[keyField] === newRow[keyField] ? (newRow as T) : row
                 );
               case 'DELETE':
                 return prev.filter(
-                  (row) => row.id !== (payload.old as { id: string }).id
+                  (row) => row[keyField] !== oldRow[keyField]
                 );
               default:
                 return prev;

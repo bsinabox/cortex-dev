@@ -11,7 +11,6 @@ import {
 import { checkServiceStatus, executeVpsCommand, getOpsLog } from './actions';
 
 type ConfigRow = {
-  id: string; // key is the id for agentic_config
   key: string;
   value: unknown;
   updated_at: string;
@@ -19,9 +18,10 @@ type ConfigRow = {
 
 type OpsLogEntry = {
   id: string;
-  event_type: string;
+  kind: string;
   severity: string;
-  description: string;
+  title: string;
+  detail: string | null;
   status: string;
   item_id: string | null;
   created_at: string;
@@ -42,9 +42,10 @@ interface HealthDashboardProps {
 }
 
 export function HealthDashboard({ initialConfig, initialOpsLog, isOperator }: HealthDashboardProps) {
-  // Use key as ID for agentic_config (it's the PK)
-  const configWithId = initialConfig.map((c) => ({ ...c, id: c.key }));
-  const { data: configRows } = useRealtimeTable<ConfigRow>('agentic_config', configWithId);
+  // Use 'key' as ID field for agentic_config (Codex P4 finding #2)
+  const { data: configRows } = useRealtimeTable<ConfigRow>(
+    'agentic_config', initialConfig, undefined, 'key'
+  );
 
   const [opsLog, setOpsLog] = useState<OpsLogEntry[]>(initialOpsLog);
   const [services, setServices] = useState<ServiceStatus[]>(
@@ -97,7 +98,7 @@ export function HealthDashboard({ initialConfig, initialOpsLog, isOperator }: He
         ...prev,
         [id]: { loading: false, result: result.stdout ?? result.stderr ?? '', error: result.ok ? undefined : result.error },
       }));
-    } catch (err) {
+    } catch {
       setVpsOutput((prev) => ({
         ...prev,
         [id]: { loading: false, error: 'Command execution failed' },
@@ -235,7 +236,7 @@ export function HealthDashboard({ initialConfig, initialOpsLog, isOperator }: He
               description="Full VPS health report"
               loading={vpsOutput['health']?.loading ?? false}
               onClick={() => runQuickCommand('health', 'node', ['-e',
-                'const fs=require("fs");const p=require("child_process");' +
+                'const p=require("child_process");' +
                 'console.log("=== DISK ===");console.log(p.execSync("df -h /").toString());' +
                 'console.log("=== MEMORY ===");console.log(p.execSync("free -h").toString());' +
                 'console.log("=== LOAD ===");console.log(p.execSync("uptime").toString());'
@@ -254,7 +255,6 @@ export function HealthDashboard({ initialConfig, initialOpsLog, isOperator }: He
               onClick={() => runQuickCommand('git-cortex', 'git', ['log', '--oneline', '-5'], '/root/repos/cortex-dev')}
             />
           </div>
-          {/* Command output */}
           {Object.entries(vpsOutput).map(([id, output]) => {
             if (!output.result && !output.error) return null;
             return (
@@ -273,7 +273,7 @@ export function HealthDashboard({ initialConfig, initialOpsLog, isOperator }: He
         </div>
       )}
 
-      {/* Ops log */}
+      {/* Ops log — fixed column names (Codex P4 finding #1) */}
       <div className="rounded-[10px] border border-[var(--border)] bg-[var(--card)]">
         <div className="flex items-center justify-between border-b border-[var(--border)] px-5 py-3">
           <h2 className="text-sm font-semibold">Ops Log (24h)</h2>
@@ -295,8 +295,8 @@ export function HealthDashboard({ initialConfig, initialOpsLog, isOperator }: He
                 <tr className="border-b border-[var(--border)] bg-[var(--muted)]">
                   <th className="whitespace-nowrap px-4 py-2 text-left text-xs font-medium text-[var(--muted-foreground)]">Time</th>
                   <th className="whitespace-nowrap px-4 py-2 text-left text-xs font-medium text-[var(--muted-foreground)]">Severity</th>
-                  <th className="whitespace-nowrap px-4 py-2 text-left text-xs font-medium text-[var(--muted-foreground)]">Event</th>
-                  <th className="px-4 py-2 text-left text-xs font-medium text-[var(--muted-foreground)]">Description</th>
+                  <th className="whitespace-nowrap px-4 py-2 text-left text-xs font-medium text-[var(--muted-foreground)]">Kind</th>
+                  <th className="px-4 py-2 text-left text-xs font-medium text-[var(--muted-foreground)]">Title</th>
                   <th className="whitespace-nowrap px-4 py-2 text-left text-xs font-medium text-[var(--muted-foreground)]">Status</th>
                 </tr>
               </thead>
@@ -317,10 +317,10 @@ export function HealthDashboard({ initialConfig, initialOpsLog, isOperator }: He
                         </span>
                       </td>
                       <td className="whitespace-nowrap px-4 py-2 font-mono text-xs">
-                        {entry.event_type}
+                        {entry.kind}
                       </td>
-                      <td className="max-w-xs truncate px-4 py-2 text-xs">
-                        {entry.description}
+                      <td className="max-w-xs truncate px-4 py-2 text-xs" title={entry.detail ?? undefined}>
+                        {entry.title}
                       </td>
                       <td className="whitespace-nowrap px-4 py-2 text-xs text-[var(--muted-foreground)]">
                         {entry.status}
