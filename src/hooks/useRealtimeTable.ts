@@ -1,7 +1,16 @@
 'use client';
 
-import { useEffect, useState, useCallback } from 'react';
+import { useEffect, useState, useCallback, useRef } from 'react';
 import { createBrowserClient } from '@/lib/supabase/client';
+
+// Singleton client to prevent subscription churn (Codex finding #3)
+let sharedClient: ReturnType<typeof createBrowserClient> | null = null;
+function getClient() {
+  if (!sharedClient) {
+    sharedClient = createBrowserClient();
+  }
+  return sharedClient;
+}
 
 export function useRealtimeTable<T extends { id: string }>(
   table: string,
@@ -9,7 +18,7 @@ export function useRealtimeTable<T extends { id: string }>(
   filter?: string
 ) {
   const [data, setData] = useState<T[]>(initialData);
-  const supabase = createBrowserClient();
+  const clientRef = useRef(getClient());
 
   // Reset data when initialData changes (e.g. filter change from server)
   useEffect(() => {
@@ -17,6 +26,7 @@ export function useRealtimeTable<T extends { id: string }>(
   }, [initialData]);
 
   useEffect(() => {
+    const supabase = clientRef.current;
     const channel = supabase
       .channel(`${table}-realtime`)
       .on(
@@ -51,13 +61,14 @@ export function useRealtimeTable<T extends { id: string }>(
     return () => {
       supabase.removeChannel(channel);
     };
-  }, [table, filter, supabase]);
+  }, [table, filter]);
 
   const refresh = useCallback(async () => {
-    let query = supabase.from(table).select('*');
+    const supabase = clientRef.current;
+    const query = supabase.from(table).select('*');
     const { data: fresh } = await query;
     if (fresh) setData(fresh as T[]);
-  }, [table, supabase]);
+  }, [table]);
 
   return { data, refresh };
 }
