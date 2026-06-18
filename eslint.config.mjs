@@ -15,6 +15,8 @@ const eslintConfig = [
     rules: {
       "@typescript-eslint/no-explicit-any": "warn",
       "@typescript-eslint/no-unused-vars": ["warn", { argsIgnorePattern: "^_" }],
+      // App Router uses layout.tsx <head> for fonts, not pages/_document.js
+      "@next/next/no-page-custom-font": "off",
     },
   },
 ];

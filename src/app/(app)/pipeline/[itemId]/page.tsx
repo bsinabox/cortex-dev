@@ -31,7 +31,7 @@ export default async function ItemDetailPage({
   const [jobsRes, messagesRes, artifactsRes, revisionsRes, workersRes] = await Promise.all([
     supabase
       .from('agentic_jobs')
-      .select('id, phase, status, round_number, dispatch_key, error_summary, output_summary, pr_number, pr_url, created_at, completed_at, execution_ms')
+      .select('id, phase, status, round_number, dispatch_key, error_text, output_text, started_at, created_at, completed_at, metadata')
       .eq('item_id', itemId)
       .order('round_number', { ascending: true })
       .order('created_at', { ascending: true }),
@@ -129,29 +129,31 @@ export default async function ItemDetailPage({
             <EmptyState text="No jobs yet" />
           ) : (
             <div className="space-y-2">
-              {jobs.map((job) => (
-                <div
-                  key={job.id}
-                  className="flex items-start gap-3 rounded-[8px] border border-[var(--border)] bg-[var(--card)] px-3 py-2.5 text-sm"
-                >
-                  <StatusDot status={job.status} />
-                  <div className="min-w-0 flex-1">
-                    <div className="flex items-center gap-2">
-                      <span className="font-medium">{job.phase}</span>
-                      <span className="text-xs text-[var(--muted-foreground)]">R{job.round_number}</span>
-                      {job.pr_number && (
-                        <span className="font-mono text-xs text-[var(--primary)]">PR #{job.pr_number}</span>
+              {jobs.map((job) => {
+                const durationMs = job.started_at && job.completed_at
+                  ? new Date(job.completed_at).getTime() - new Date(job.started_at).getTime()
+                  : null;
+                return (
+                  <div
+                    key={job.id}
+                    className="flex items-start gap-3 rounded-[8px] border border-[var(--border)] bg-[var(--card)] px-3 py-2.5 text-sm"
+                  >
+                    <StatusDot status={job.status} />
+                    <div className="min-w-0 flex-1">
+                      <div className="flex items-center gap-2">
+                        <span className="font-medium">{job.phase}</span>
+                        <span className="text-xs text-[var(--muted-foreground)]">R{job.round_number}</span>
+                      </div>
+                      {job.error_text && (
+                        <p className="mt-1 line-clamp-2 text-xs text-red-600">{job.error_text}</p>
                       )}
                     </div>
-                    {job.error_summary && (
-                      <p className="mt-1 text-xs text-red-600">{job.error_summary}</p>
-                    )}
+                    <span className="shrink-0 text-xs text-[var(--muted-foreground)]">
+                      {durationMs ? `${(durationMs / 1000).toFixed(1)}s` : timeAgo(job.created_at)}
+                    </span>
                   </div>
-                  <span className="shrink-0 text-xs text-[var(--muted-foreground)]">
-                    {job.execution_ms ? `${(job.execution_ms / 1000).toFixed(1)}s` : timeAgo(job.created_at)}
-                  </span>
-                </div>
-              ))}
+                );
+              })}
             </div>
           )}
         </Section>
@@ -167,7 +169,7 @@ export default async function ItemDetailPage({
                   key={rev.id}
                   className={`rounded-[8px] border px-3 py-2.5 text-sm ${
                     rev.status === 'current'
-                      ? 'border-[var(--primary)] bg-indigo-50'
+                      ? 'border-[var(--primary)] bg-indigo-50 dark:bg-indigo-950'
                       : 'border-[var(--border)] bg-[var(--card)]'
                   }`}
                 >
