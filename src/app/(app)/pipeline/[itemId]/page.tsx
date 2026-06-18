@@ -58,9 +58,9 @@ export default async function ItemDetailPage(props: { params: Promise<{ itemId: 
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const revisions = ((revisionsRes.data ?? []) as any[]).map((r: any) => ({
     ...r,
-    scope_summary: typeof r.scope_summary === 'string' && r.scope_summary.length > 400
-      ? r.scope_summary.substring(0, 400) + '…'
-      : r.scope_summary ?? null,
+    scope_summary: r.scope_summary
+      ? typeof r.scope_summary === 'string' ? r.scope_summary : JSON.stringify(r.scope_summary)
+      : null,
   }));
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const workers = (workersRes.data ?? []) as any[];
@@ -97,8 +97,10 @@ export default async function ItemDetailPage(props: { params: Promise<{ itemId: 
     blocked: '#EF4444', cancelled: '#78716C', skipped: '#78716C', stalled: '#D97706',
   };
 
-  function truncate(text: string, max: number) {
-    if (!text || text.length <= max) return text || '';
+  function truncate(val: unknown, max: number): string {
+    if (!val) return '';
+    const text = typeof val === 'string' ? val : JSON.stringify(val);
+    if (text.length <= max) return text;
     return text.substring(0, max) + '…';
   }
 
