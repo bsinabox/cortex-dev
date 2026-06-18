@@ -137,6 +137,58 @@ export const REPO_CONFIG: Record<string, { label: string; bg: string; text: stri
   'boltbox-app': { label: 'BoltBox', bg: '#FEF3C7', text: '#92400E' },
 };
 
+// Worker session status config
+export const WORKER_STATUS_CONFIG: Record<string, { bg: string; text: string; label: string; dot: string }> = {
+  queued:   { bg: '#DBEAFE', text: '#1E40AF', label: 'Queued',   dot: '#3B82F6' },
+  running:  { bg: '#D1FAE5', text: '#065F46', label: 'Running',  dot: '#10B981' },
+  complete: { bg: '#D1FAE5', text: '#065F46', label: 'Complete', dot: '#059669' },
+  failed:   { bg: '#FEE2E2', text: '#991B1B', label: 'Failed',   dot: '#EF4444' },
+  stalled:  { bg: '#FEF3C7', text: '#92400E', label: 'Stalled',  dot: '#F59E0B' },
+};
+
+// Worker model config
+export const WORKER_MODEL_CONFIG: Record<string, { bg: string; text: string; label: string }> = {
+  'claude-code': { bg: '#F3E8FF', text: '#7C3AED', label: 'Claude Code' },
+  'codex':       { bg: '#D1FAE5', text: '#065F46', label: 'Codex' },
+};
+
+// Worker session role config
+export const WORKER_ROLE_CONFIG: Record<string, { bg: string; text: string; label: string }> = {
+  implementer: { bg: '#DBEAFE', text: '#1E40AF', label: 'Implementer' },
+  verifier:    { bg: '#FEF3C7', text: '#92400E', label: 'Verifier' },
+  test_runner: { bg: '#CCFBF1', text: '#0F766E', label: 'Test Runner' },
+};
+
+// Ops log severity config
+export const SEVERITY_CONFIG: Record<string, { bg: string; text: string; border: string }> = {
+  info:     { bg: 'var(--color-stone-50)',  text: 'var(--color-stone-600)', border: 'var(--color-stone-200)' },
+  warning:  { bg: '#FEF3C7', text: '#92400E', border: '#FDE68A' },
+  error:    { bg: '#FEE2E2', text: '#991B1B', border: '#FECACA' },
+  critical: { bg: '#FEE2E2', text: '#991B1B', border: '#EF4444' },
+};
+
+// Conductor config keys to display in health view
+export const CONFIG_DISPLAY_KEYS = [
+  'mode',
+  'max_parallel_workers',
+  'build_loop_enabled',
+  'review_loop_enabled',
+  'test_gate_mode',
+  'readiness_gate_mode',
+  'transition_guard_mode',
+  'decomposition_mode',
+  'active_batch',
+  'last_heartbeat_at',
+] as const;
+
+// VPS service names for health checks
+export const VPS_SERVICES = [
+  { id: 'agentic-conductor', label: 'Conductor' },
+  { id: 'worker-auto-launcher', label: 'Worker Launcher' },
+  { id: 'vps-command-daemon', label: 'Command Daemon' },
+  { id: 'file-deploy-worker', label: 'File Deploy' },
+] as const;
+
 // Time ago helper
 export function timeAgo(date: string | Date): string {
   const now = Date.now();
@@ -150,4 +202,24 @@ export function timeAgo(date: string | Date): string {
   const days = Math.floor(hours / 24);
   if (days < 30) return `${days}d ago`;
   return `${Math.floor(days / 30)}mo ago`;
+}
+
+// Duration formatter for worker sessions
+export function formatDuration(minutes: number | null): string {
+  if (minutes == null) return '—';
+  if (minutes < 1) return '<1m';
+  if (minutes < 60) return `${minutes}m`;
+  const h = Math.floor(minutes / 60);
+  const m = minutes % 60;
+  return m > 0 ? `${h}h ${m}m` : `${h}h`;
+}
+
+// Heartbeat age classifier
+export function heartbeatStatus(lastHeartbeat: string | null): 'healthy' | 'warning' | 'stale' | 'unknown' {
+  if (!lastHeartbeat) return 'unknown';
+  const ageMs = Date.now() - new Date(lastHeartbeat).getTime();
+  const ageMins = ageMs / 60000;
+  if (ageMins < 5) return 'healthy';
+  if (ageMins < 15) return 'warning';
+  return 'stale';
 }
