@@ -40,13 +40,28 @@ export default async function ItemDetailPage(props: { params: Promise<{ itemId: 
   ]);
 
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  const jobs = (jobsRes.data ?? []) as any[];
+  const jobs = ((jobsRes.data ?? []) as any[]).map((j: any) => ({
+    ...j,
+    error_text: typeof j.error_text === 'string' && j.error_text.length > 300
+      ? j.error_text.substring(0, 300) + '…'
+      : j.error_text ?? null,
+  }));
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  const messages = (messagesRes.data ?? []) as any[];
+  const messages = ((messagesRes.data ?? []) as any[]).map((m: any) => ({
+    ...m,
+    content: typeof m.content === 'string' && m.content.length > 500
+      ? m.content.substring(0, 500) + '…'
+      : m.content ?? '',
+  }));
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const artifacts = (artifactsRes.data ?? []) as any[];
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  const revisions = (revisionsRes.data ?? []) as any[];
+  const revisions = ((revisionsRes.data ?? []) as any[]).map((r: any) => ({
+    ...r,
+    scope_summary: typeof r.scope_summary === 'string' && r.scope_summary.length > 400
+      ? r.scope_summary.substring(0, 400) + '…'
+      : r.scope_summary ?? null,
+  }));
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const workers = (workersRes.data ?? []) as any[];
 
