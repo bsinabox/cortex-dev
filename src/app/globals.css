@@ -1,0 +1,74 @@
+@import "tailwindcss";
+
+@theme {
+  /* Atlas Design System — Cortex Dev */
+
+  /* Primary palette */
+  --color-indigo-600: #4F46E5;
+  --color-amber-500: #D97706;
+
+  /* Stone grays */
+  --color-stone-50: #FAFAF9;
+  --color-stone-100: #F5F5F4;
+  --color-stone-200: #E7E5E4;
+  --color-stone-300: #D6D3D0;
+  --color-stone-400: #A8A29E;
+  --color-stone-500: #78716C;
+  --color-stone-600: #57534E;
+  --color-stone-700: #44403C;
+  --color-stone-800: #292524;
+  --color-stone-900: #1C1917;
+  --color-stone-950: #0C0A09;
+
+  /* Status colors */
+  --color-emerald-500: #10B981;
+  --color-red-500: #EF4444;
+  --color-blue-500: #3B82F6;
+  --color-violet-500: #8B5CF6;
+  --color-teal-500: #14B8A6;
+  --color-purple-500: #A855F7;
+
+  /* Typography */
+  --font-sans: "DM Sans", ui-sans-serif, system-ui, sans-serif;
+  --font-mono: "Fira Code", ui-monospace, monospace;
+
+  /* Radius */
+  --radius-lg: 10px;
+  --radius-md: 8px;
+  --radius-sm: 6px;
+}
+
+@layer base {
+  :root {
+    --background: var(--color-stone-50);
+    --foreground: var(--color-stone-900);
+    --muted: var(--color-stone-100);
+    --muted-foreground: var(--color-stone-500);
+    --border: var(--color-stone-200);
+    --primary: var(--color-indigo-600);
+    --primary-foreground: #ffffff;
+    --accent: var(--color-amber-500);
+    --card: #ffffff;
+    --card-foreground: var(--color-stone-900);
+    --nav-height: 4rem;
+    --bottom-nav-height: 4.5rem;
+  }
+
+  .dark {
+    --background: var(--color-stone-950);
+    --foreground: var(--color-stone-100);
+    --muted: var(--color-stone-800);
+    --muted-foreground: var(--color-stone-400);
+    --border: var(--color-stone-700);
+    --card: var(--color-stone-900);
+    --card-foreground: var(--color-stone-100);
+  }
+
+  body {
+    background-color: var(--background);
+    color: var(--foreground);
+    font-family: var(--font-sans);
+    -webkit-font-smoothing: antialiased;
+    -moz-osx-font-smoothing: grayscale;
+  }
+}
