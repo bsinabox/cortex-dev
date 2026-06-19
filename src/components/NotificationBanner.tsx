@@ -110,7 +110,7 @@ export function NotificationBanner() {
           </svg>
         </div>
         <p className="min-w-0 flex-1 text-xs font-medium text-emerald-700 dark:text-emerald-300">
-          Notifications enabled — you'll get alerts for reviews, builds, and blockers.
+          Notifications enabled — you will get alerts for reviews, builds, and blockers.
         </p>
       </div>
     );
