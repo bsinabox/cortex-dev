@@ -239,9 +239,13 @@ export function PipelineBoard({ initialItems }: PipelineBoardProps) {
                 </span>
               </button>
 
-              {/* Items */}
+              {/* Description + Items */}
               {!isCollapsed && (
-                <div className="space-y-1.5 p-1.5">
+                <div className="p-1.5">
+                  <p className="mb-1.5 px-1.5 text-[10px] leading-relaxed text-[var(--muted-foreground)]">
+                    {col.description}
+                  </p>
+                  <div className="space-y-1.5">
                   {batchIds.map((batchId) => (
                     <BatchGroup
                       key={batchId}
@@ -253,6 +257,7 @@ export function PipelineBoard({ initialItems }: PipelineBoardProps) {
                   {col.unbatched.map((item) => (
                     <ItemCard key={item.id} item={item} />
                   ))}
+                  </div>
                 </div>
               )}
             </div>
@@ -294,7 +299,11 @@ export function PipelineBoard({ initialItems }: PipelineBoardProps) {
                     </span>
                   </div>
 
-                  <div className="space-y-2 p-2" style={{ minHeight: '60px' }}>
+                  <p className="px-3 py-1.5 text-[9px] leading-relaxed text-[var(--muted-foreground)]">
+                    {col.description}
+                  </p>
+
+                  <div className="space-y-2 px-2 pb-2" style={{ minHeight: '40px' }}>
                     {col.items.length === 0 ? (
                       <div className="py-4 text-center text-xs text-[var(--muted-foreground)]">Empty</div>
                     ) : (

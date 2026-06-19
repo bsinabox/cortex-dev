@@ -3,10 +3,11 @@
 export type StatusColumn = {
   key: string;
   label: string;
+  description: string;
   statuses: string[];
-  color: string;        // Tailwind-compatible color token
-  bgClass: string;      // CSS var for column header bg
-  textClass: string;    // CSS var for column header text
+  color: string;
+  bgClass: string;
+  textClass: string;
   collapsed?: boolean;
 };
 
@@ -14,6 +15,7 @@ export const PIPELINE_COLUMNS: StatusColumn[] = [
   {
     key: 'intake',
     label: 'Intake',
+    description: 'Waiting for Hub design session. Start a design conversation to advance.',
     statuses: ['intake', 'awaiting_hub_design'],
     color: 'slate',
     bgClass: 'var(--color-stone-100)',
@@ -22,6 +24,7 @@ export const PIPELINE_COLUMNS: StatusColumn[] = [
   {
     key: 'design',
     label: 'Design',
+    description: 'Claude and Codex are designing the solution. Auto-advances to Review when complete.',
     statuses: ['designing', 'cross_review', 'design_conflict'],
     color: 'violet',
     bgClass: '#EDE9FE',
@@ -30,6 +33,7 @@ export const PIPELINE_COLUMNS: StatusColumn[] = [
   {
     key: 'review',
     label: 'Review',
+    description: 'Needs human approval. Approve to start build, or request changes.',
     statuses: ['human_review', 'design_review_hold'],
     color: 'amber',
     bgClass: '#FEF3C7',
@@ -38,6 +42,7 @@ export const PIPELINE_COLUMNS: StatusColumn[] = [
   {
     key: 'build',
     label: 'Build',
+    description: 'Approved and being built by workers. Auto-advances to QA on completion.',
     statuses: ['approved', 'executing'],
     color: 'blue',
     bgClass: '#DBEAFE',
@@ -46,6 +51,7 @@ export const PIPELINE_COLUMNS: StatusColumn[] = [
   {
     key: 'qa',
     label: 'QA',
+    description: 'Built on dev — verify the changes work, then promote to production.',
     statuses: ['qa', 'testing_in_dev'],
     color: 'teal',
     bgClass: '#CCFBF1',
@@ -54,6 +60,7 @@ export const PIPELINE_COLUMNS: StatusColumn[] = [
   {
     key: 'promotion',
     label: 'Promotion',
+    description: 'Verified and moving to production. Approve promotion to complete.',
     statuses: ['promotion_review', 'promoting', 'waiting_migration', 'waiting_prod_evidence'],
     color: 'purple',
     bgClass: '#F3E8FF',
@@ -62,6 +69,7 @@ export const PIPELINE_COLUMNS: StatusColumn[] = [
   {
     key: 'done',
     label: 'Done',
+    description: 'Completed and deployed. No further action needed.',
     statuses: ['done', 'subtasks_complete'],
     color: 'emerald',
     bgClass: '#D1FAE5',
@@ -70,6 +78,7 @@ export const PIPELINE_COLUMNS: StatusColumn[] = [
   {
     key: 'blocked',
     label: 'Blocked',
+    description: 'Stuck — needs manual intervention or a dependency resolved to continue.',
     statuses: ['blocked', 'readiness_blocked', 'waiting_on_dependency', 'decomposed'],
     color: 'red',
     bgClass: '#FEE2E2',
@@ -78,6 +87,7 @@ export const PIPELINE_COLUMNS: StatusColumn[] = [
   {
     key: 'terminal',
     label: 'Terminal',
+    description: 'Cancelled or failed. No further action.',
     statuses: ['cancelled', 'failed'],
     color: 'gray',
     bgClass: 'var(--color-stone-100)',
