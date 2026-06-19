@@ -210,27 +210,57 @@ export function PipelineBoard({ initialItems }: PipelineBoardProps) {
     setPullDistance(0);
   }, [pullDistance, refreshing, refresh]);
 
-  // Filter items by repo and person
+  // Filter items by repo only — person toggle changes section assignment, not visibility
   const filtered = useMemo(() => {
-    return items.filter((i) => {
-      if (repoFilter !== 'all' && i.repo !== repoFilter) return false;
-      if (personFilter === 'scott') {
-        return BRIAN_ACTS_ON.has(i.status) || SHARED_STATUSES.has(i.status);
-      }
-      if (personFilter === 'brian') {
-        return SCOTT_ACTS_ON.has(i.status) || SHARED_STATUSES.has(i.status);
-      }
-      return true;
-    });
-  }, [items, repoFilter, personFilter]);
+    if (repoFilter === 'all') return items;
+    return items.filter((i) => i.repo === repoFilter);
+  }, [items, repoFilter]);
 
-  // Build sections
+  // Build sections — person toggle changes what goes in "Action needed" vs "Waiting on other"
   const sectionData = useMemo(() => {
-    return SECTIONS.map((sec) => {
+    // Dynamic sections based on person filter
+    const dynamicSections: SectionDef[] = [];
+
+    if (personFilter === 'scott') {
+      // Scott's action items: testing, blocked
+      dynamicSections.push({
+        ...SECTIONS.find(s => s.key === 'action')!,
+        statuses: ['testing_in_dev'],
+        description: 'Items you need to verify or test on dev.',
+      });
+      // Brian's queue — items waiting on Brian
+      dynamicSections.push({
+        key: 'waiting_brian',
+        label: 'Waiting on Brian',
+        description: 'Submitted for approval — Brian needs to review these.',
+        icon: '\u23F3',
+        accentBg: '#FEF3C7',
+        accentText: '#92400E',
+        statuses: ['human_review', 'design_review_hold', 'promotion_review'],
+        defaultOpen: false,
+      });
+    } else if (personFilter === 'brian') {
+      // Brian's action items: approvals
+      dynamicSections.push({
+        ...SECTIONS.find(s => s.key === 'action')!,
+        statuses: ['human_review', 'design_review_hold', 'promotion_review'],
+        description: 'Items waiting for approval or review.',
+      });
+    } else {
+      // All — show combined action section
+      dynamicSections.push(SECTIONS.find(s => s.key === 'action')!);
+    }
+
+    // Add remaining static sections
+    for (const sec of SECTIONS) {
+      if (sec.key === 'action') continue; // already handled
+      dynamicSections.push(sec);
+    }
+
+    return dynamicSections.map((sec) => {
       const sectionItems = filtered
         .filter((item) => sec.statuses.includes(item.status))
         .sort((a, b) => {
-          // Priority first for queue, recency first for everything else
           if (sec.key === 'queue') {
             const pOrder = ['p0', 'p1', 'p2', 'p3'];
             const pDiff = pOrder.indexOf(a.priority) - pOrder.indexOf(b.priority);
@@ -240,7 +270,7 @@ export function PipelineBoard({ initialItems }: PipelineBoardProps) {
         });
       return { ...sec, items: sectionItems };
     }).filter((sec) => sec.items.length > 0);
-  }, [filtered]);
+  }, [filtered, personFilter]);
 
   const actionCount = sectionData.find(s => s.key === 'action')?.items.length ?? 0;
   const totalActive = sectionData.reduce((sum, s) => s.key !== 'done' ? sum + s.items.length : sum, 0);
