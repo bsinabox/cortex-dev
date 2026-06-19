@@ -5,6 +5,7 @@ import { getUserRole, getUserName } from '@/lib/auth';
 import { HUMAN_GATE_STATUSES } from '@/lib/constants';
 import { BottomNav } from '@/components/BottomNav';
 import { SideNav } from '@/components/SideNav';
+import { NotificationBanner } from '@/components/NotificationBanner';
 
 export default async function AppLayout({
   children,
@@ -40,6 +41,7 @@ export default async function AppLayout({
       {/* Main content — offset for sidebar on desktop */}
       <main className="pb-[var(--bottom-nav-height)] lg:pb-0 lg:pl-60">
         <div className="mx-auto max-w-7xl px-4 py-6 sm:px-6 lg:px-8">
+          <NotificationBanner />
           <Suspense
             fallback={
               <div className="flex items-center justify-center py-12">
