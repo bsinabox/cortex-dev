@@ -7,6 +7,23 @@ import { type PipelineItem } from '@/components/ItemCard';
 import { PRIORITY_CONFIG, REPO_CONFIG, STATUS_LABELS, timeAgo } from '@/lib/constants';
 // Inline mini copy button — no external dependency
 
+/* ─── Person filter — who is the next actor ─── */
+
+const SCOTT_ACTS_ON = new Set([
+  'testing_in_dev', 'awaiting_hub_design', 'intake', 'designing',
+  'cross_review', 'design_conflict', 'blocked', 'readiness_blocked',
+  'waiting_on_dependency', 'decomposed',
+]);
+const BRIAN_ACTS_ON = new Set([
+  'human_review', 'design_review_hold', 'promotion_review',
+]);
+// Autonomous + done statuses shown for everyone
+const SHARED_STATUSES = new Set([
+  'approved', 'executing', 'qa', 'promoting',
+  'waiting_migration', 'waiting_prod_evidence',
+  'done', 'subtasks_complete',
+]);
+
 /* ─── Section definitions ─── */
 
 type SectionDef = {
@@ -137,6 +154,7 @@ export function PipelineBoard({ initialItems }: PipelineBoardProps) {
   );
 
   const [repoFilter, setRepoFilter] = useState<string>('all');
+  const [personFilter, setPersonFilter] = useState<'scott' | 'brian' | 'all'>('scott');
   const [collapsed, setCollapsed] = useState<Set<string>>(() => {
     const set = new Set<string>();
     for (const s of SECTIONS) {
@@ -192,11 +210,19 @@ export function PipelineBoard({ initialItems }: PipelineBoardProps) {
     setPullDistance(0);
   }, [pullDistance, refreshing, refresh]);
 
-  // Filter items
+  // Filter items by repo and person
   const filtered = useMemo(() => {
-    if (repoFilter === 'all') return items;
-    return items.filter((i) => i.repo === repoFilter);
-  }, [items, repoFilter]);
+    return items.filter((i) => {
+      if (repoFilter !== 'all' && i.repo !== repoFilter) return false;
+      if (personFilter === 'scott') {
+        return SCOTT_ACTS_ON.has(i.status) || SHARED_STATUSES.has(i.status);
+      }
+      if (personFilter === 'brian') {
+        return BRIAN_ACTS_ON.has(i.status) || SHARED_STATUSES.has(i.status);
+      }
+      return true;
+    });
+  }, [items, repoFilter, personFilter]);
 
   // Build sections
   const sectionData = useMemo(() => {
@@ -235,8 +261,22 @@ export function PipelineBoard({ initialItems }: PipelineBoardProps) {
         </div>
       )}
 
-      {/* Summary bar */}
-      <div className="mb-3 flex items-center gap-2">
+      {/* Filter bar */}
+      <div className="mb-3 flex items-center gap-1.5">
+        {/* Person toggle */}
+        <div className="flex rounded-[8px] border border-[var(--border)] overflow-hidden">
+          {(['scott', 'brian', 'all'] as const).map((p) => (
+            <button key={p} onClick={() => setPersonFilter(p)}
+              className={`px-2.5 py-1 text-[11px] font-medium capitalize transition-colors ${
+                personFilter === p
+                  ? 'bg-[var(--primary)] text-white'
+                  : 'bg-[var(--background)] text-[var(--muted-foreground)]'
+              }`}>
+              {p === 'all' ? 'All' : p === 'scott' ? 'Mine' : 'Brian'}
+            </button>
+          ))}
+        </div>
+
         <select
           value={repoFilter}
           onChange={(e) => handleRepoChange(e.target.value)}
@@ -247,9 +287,10 @@ export function PipelineBoard({ initialItems }: PipelineBoardProps) {
           <option value="bs-box-web">BS Box</option>
           <option value="cortex-dev">Cortex</option>
         </select>
+
         <span className="ml-auto text-[11px] text-[var(--muted-foreground)]">
           {actionCount > 0 && (
-            <span className="mr-2 font-semibold text-red-500">{actionCount} need action</span>
+            <span className="mr-2 font-semibold text-red-500">{actionCount} action</span>
           )}
           {totalActive} active
         </span>
