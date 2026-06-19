@@ -11,17 +11,16 @@ export function NotificationBanner() {
   const [dismissed, setDismissed] = useState(false);
 
   useEffect(() => {
-    checkPushState();
+    checkState();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  async function checkPushState() {
-    // Check browser support
+  async function checkState() {
     if (!('serviceWorker' in navigator) || !('PushManager' in window) || !('Notification' in window)) {
       setState('unsupported');
       return;
     }
 
-    // Check if already dismissed this session
     try {
       if (sessionStorage.getItem('cortex-push-dismissed')) {
         setDismissed(true);
@@ -35,23 +34,20 @@ export function NotificationBanner() {
     }
 
     if (permission === 'granted') {
-      // Check if already subscribed
       const reg = await navigator.serviceWorker.ready;
       const existing = await reg.pushManager.getSubscription();
       if (existing) {
         setState('subscribed');
       } else {
-        // Permission granted but not subscribed — auto-subscribe
-        await subscribe();
+        await doSubscribe();
       }
       return;
     }
 
-    // permission === 'default' — show the prompt banner
     setState('prompt');
   }
 
-  const subscribe = useCallback(async () => {
+  const doSubscribe = useCallback(async () => {
     setState('subscribing');
     try {
       const permission = await Notification.requestPermission();
@@ -61,22 +57,19 @@ export function NotificationBanner() {
       }
 
       const reg = await navigator.serviceWorker.ready;
+      const appServerKey = urlBase64ToUint8Array(VAPID_PUBLIC_KEY);
       const subscription = await reg.pushManager.subscribe({
         userVisibleOnly: true,
-        applicationServerKey: urlBase64ToUint8Array(VAPID_PUBLIC_KEY),
+        applicationServerKey: appServerKey.buffer as ArrayBuffer,
       });
 
-      // Send subscription to server
       const json = subscription.toJSON();
       const response = await fetch('/api/push/subscribe', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           endpoint: json.endpoint,
-          keys: {
-            p256dh: json.keys?.p256dh,
-            auth: json.keys?.auth,
-          },
+          keys: { p256dh: json.keys?.p256dh, auth: json.keys?.auth },
         }),
       });
 
@@ -94,12 +87,9 @@ export function NotificationBanner() {
 
   const dismiss = () => {
     setDismissed(true);
-    try {
-      sessionStorage.setItem('cortex-push-dismissed', '1');
-    } catch { /* ignore */ }
+    try { sessionStorage.setItem('cortex-push-dismissed', '1'); } catch { /* */ }
   };
 
-  // Don't render if not in prompt state, or if dismissed, or subscribed
   if (state !== 'prompt' || dismissed) return null;
 
   return (
@@ -110,10 +100,10 @@ export function NotificationBanner() {
         </svg>
       </div>
       <p className="min-w-0 flex-1 text-xs text-indigo-700 dark:text-indigo-300">
-        Get notified when items need review, finish building, or get blocked.
+        Get notified when items need review or get blocked.
       </p>
       <button
-        onClick={subscribe}
+        onClick={doSubscribe}
         className="shrink-0 rounded-[8px] bg-indigo-600 px-3 py-1.5 text-xs font-medium text-white transition-colors hover:bg-indigo-700"
       >
         Enable
@@ -133,9 +123,7 @@ export function NotificationBanner() {
 
 function urlBase64ToUint8Array(base64String: string): Uint8Array {
   const padding = '='.repeat((4 - (base64String.length % 4)) % 4);
-  const base64 = (base64String + padding)
-    .replace(/-/g, '+')
-    .replace(/_/g, '/');
+  const base64 = (base64String + padding).replace(/-/g, '+').replace(/_/g, '/');
   const rawData = atob(base64);
   const outputArray = new Uint8Array(rawData.length);
   for (let i = 0; i < rawData.length; ++i) {
