@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, useMemo } from 'react';
+import { useState, useMemo, useEffect } from 'react';
 import { useRealtimeTable } from '@/hooks/useRealtimeTable';
 import { ItemCard, type PipelineItem } from '@/components/ItemCard';
 import { PIPELINE_COLUMNS, HUMAN_GATE_STATUSES } from '@/lib/constants';
@@ -8,6 +8,9 @@ import { PIPELINE_COLUMNS, HUMAN_GATE_STATUSES } from '@/lib/constants';
 interface PipelineBoardProps {
   initialItems: PipelineItem[];
 }
+
+const TERMINAL_STATUSES = ['done', 'subtasks_complete'];
+const RECENCY_MS = 72 * 60 * 60 * 1000; // 72 hours
 
 export function PipelineBoard({ initialItems }: PipelineBoardProps) {
   const { data: items } = useRealtimeTable<PipelineItem>(
@@ -18,29 +21,84 @@ export function PipelineBoard({ initialItems }: PipelineBoardProps) {
   const [repoFilter, setRepoFilter] = useState<string>('all');
   const [priorityFilter, setPriorityFilter] = useState<string>('all');
   const [myAttention, setMyAttention] = useState(false);
+  const [activeOnly, setActiveOnly] = useState(true);
+
+  // Sticky repo filter — load from localStorage on mount
+  useEffect(() => {
+    try {
+      const saved = localStorage.getItem('cortex-repo-filter');
+      if (saved && ['all', 'kertec-field-app-v2', 'bs-box-web', 'cortex-dev'].includes(saved)) {
+        setRepoFilter(saved);
+      }
+    } catch {
+      // localStorage unavailable
+    }
+  }, []);
+
+  const handleRepoChange = (value: string) => {
+    setRepoFilter(value);
+    try {
+      localStorage.setItem('cortex-repo-filter', value);
+    } catch {
+      // localStorage unavailable
+    }
+  };
+
+  // Batch progress across ALL items (not just filtered)
+  const batchProgress = useMemo(() => {
+    const progress: Record<string, { total: number; done: number }> = {};
+    for (const item of items) {
+      if (!item.batch_id) continue;
+      if (!progress[item.batch_id]) progress[item.batch_id] = { total: 0, done: 0 };
+      progress[item.batch_id].total++;
+      if (item.status === 'done' || item.status === 'subtasks_complete') {
+        progress[item.batch_id].done++;
+      }
+    }
+    return progress;
+  }, [items]);
 
   const filteredItems = useMemo(() => {
+    const now = Date.now();
     return items.filter((item) => {
       if (repoFilter !== 'all' && item.repo !== repoFilter) return false;
       if (priorityFilter !== 'all' && item.priority !== priorityFilter) return false;
       if (myAttention && !HUMAN_GATE_STATUSES.includes(item.status as typeof HUMAN_GATE_STATUSES[number])) return false;
+      if (activeOnly) {
+        if (TERMINAL_STATUSES.includes(item.status)) return false;
+        if (now - new Date(item.updated_at).getTime() > RECENCY_MS) return false;
+      }
       return true;
     });
-  }, [items, repoFilter, priorityFilter, myAttention]);
+  }, [items, repoFilter, priorityFilter, myAttention, activeOnly]);
 
-  // Group items by column
+  // Group items by column, then by batch within each column
   const columnData = useMemo(() => {
-    return PIPELINE_COLUMNS.map((col) => ({
-      ...col,
-      items: filteredItems
+    return PIPELINE_COLUMNS.map((col) => {
+      const colItems = filteredItems
         .filter((item) => col.statuses.includes(item.status))
-        .sort((a, b) => {
-          const pOrder = ['p0', 'p1', 'p2', 'p3'];
-          const pDiff = pOrder.indexOf(a.priority) - pOrder.indexOf(b.priority);
-          if (pDiff !== 0) return pDiff;
-          return new Date(b.updated_at).getTime() - new Date(a.updated_at).getTime();
-        }),
-    }));
+        .sort((a, b) => new Date(b.updated_at).getTime() - new Date(a.updated_at).getTime());
+
+      // Separate batched from unbatched
+      const batched: Record<string, PipelineItem[]> = {};
+      const unbatched: PipelineItem[] = [];
+
+      for (const item of colItems) {
+        if (item.batch_id) {
+          if (!batched[item.batch_id]) batched[item.batch_id] = [];
+          batched[item.batch_id].push(item);
+        } else {
+          unbatched.push(item);
+        }
+      }
+
+      return {
+        ...col,
+        items: colItems,
+        batched,
+        unbatched,
+      };
+    });
   }, [filteredItems]);
 
   const totalCount = filteredItems.length;
@@ -49,9 +107,20 @@ export function PipelineBoard({ initialItems }: PipelineBoardProps) {
     <div>
       {/* Filters */}
       <div className="mb-4 flex flex-wrap items-center gap-2">
+        <button
+          onClick={() => setActiveOnly((v) => !v)}
+          className={`rounded-[8px] border px-3 py-1.5 text-sm font-medium transition-colors ${
+            activeOnly
+              ? 'border-emerald-500 bg-emerald-50 text-emerald-700 dark:border-emerald-600 dark:bg-emerald-950 dark:text-emerald-300'
+              : 'border-[var(--border)] bg-[var(--background)] text-[var(--foreground)]'
+          }`}
+        >
+          Active now
+        </button>
+
         <select
           value={repoFilter}
-          onChange={(e) => setRepoFilter(e.target.value)}
+          onChange={(e) => handleRepoChange(e.target.value)}
           className="rounded-[8px] border border-[var(--border)] bg-[var(--background)] px-3 py-1.5 text-sm"
         >
           <option value="all">All repos</option>
@@ -94,6 +163,8 @@ export function PipelineBoard({ initialItems }: PipelineBoardProps) {
             // Hide collapsed columns with no items
             if (col.collapsed && col.items.length === 0) return null;
 
+            const batchIds = Object.keys(col.batched);
+
             return (
               <div
                 key={col.key}
@@ -125,9 +196,22 @@ export function PipelineBoard({ initialItems }: PipelineBoardProps) {
                       Empty
                     </div>
                   ) : (
-                    col.items.map((item) => (
-                      <ItemCard key={item.id} item={item} />
-                    ))
+                    <>
+                      {/* Batch groups first */}
+                      {batchIds.map((batchId) => (
+                        <BatchGroup
+                          key={batchId}
+                          batchId={batchId}
+                          items={col.batched[batchId]}
+                          progress={batchProgress[batchId]}
+                        />
+                      ))}
+
+                      {/* Unbatched items */}
+                      {col.unbatched.map((item) => (
+                        <ItemCard key={item.id} item={item} />
+                      ))}
+                    </>
                   )}
                 </div>
               </div>
@@ -135,6 +219,69 @@ export function PipelineBoard({ initialItems }: PipelineBoardProps) {
           })}
         </div>
       </div>
+    </div>
+  );
+}
+
+/* ─── Batch group with collapsible header ─────────────────────────── */
+
+function BatchGroup({
+  batchId,
+  items,
+  progress,
+}: {
+  batchId: string;
+  items: PipelineItem[];
+  progress?: { total: number; done: number };
+}) {
+  const [collapsed, setCollapsed] = useState(false);
+
+  // Clean up batch_id for display: replace underscores/hyphens with spaces,
+  // strip trailing timestamps like _20260525 or _2026_05_20
+  const displayName = batchId
+    .replace(/[-_]\d{8,14}$/g, '')
+    .replace(/[-_]\d{4}_\d{2}_\d{2}.*$/g, '')
+    .replace(/[_-]/g, ' ')
+    .trim();
+
+  return (
+    <div className="rounded-[8px] border border-dashed border-[var(--border)]">
+      <button
+        onClick={() => setCollapsed((v) => !v)}
+        className="flex w-full items-center gap-1.5 px-2.5 py-1.5 text-left"
+      >
+        <svg
+          className={`h-3 w-3 shrink-0 text-[var(--muted-foreground)] transition-transform ${
+            collapsed ? '' : 'rotate-90'
+          }`}
+          fill="currentColor"
+          viewBox="0 0 20 20"
+        >
+          <path
+            fillRule="evenodd"
+            d="M7.21 14.77a.75.75 0 01.02-1.06L11.168 10 7.23 6.29a.75.75 0 111.04-1.08l4.5 4.25a.75.75 0 010 1.08l-4.5 4.25a.75.75 0 01-1.06-.02z"
+            clipRule="evenodd"
+          />
+        </svg>
+        <span className="min-w-0 flex-1 truncate text-[10px] font-semibold text-[var(--muted-foreground)]">
+          {displayName}
+        </span>
+        {progress && (
+          <span className="shrink-0 text-[10px] text-[var(--muted-foreground)]">
+            {progress.done}/{progress.total}
+          </span>
+        )}
+        <span className="flex h-4 min-w-4 items-center justify-center rounded-full bg-[var(--muted)] text-[9px] font-bold text-[var(--muted-foreground)]">
+          {items.length}
+        </span>
+      </button>
+      {!collapsed && (
+        <div className="space-y-1.5 px-1.5 pb-1.5">
+          {items.map((item) => (
+            <ItemCard key={item.id} item={item} />
+          ))}
+        </div>
+      )}
     </div>
   );
 }

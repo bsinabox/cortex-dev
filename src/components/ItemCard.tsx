@@ -13,6 +13,7 @@ export type PipelineItem = {
   status: string;
   priority: string;
   repo: string;
+  batch_id: string | null;
   updated_at: string;
   escalated_at: string | null;
   escalation_reason: string | null;
