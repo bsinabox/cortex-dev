@@ -1,16 +1,133 @@
 'use client';
 
 import { useState, useMemo, useEffect, useRef, useCallback } from 'react';
+import Link from 'next/link';
 import { useRealtimeTable } from '@/hooks/useRealtimeTable';
-import { ItemCard, type PipelineItem } from '@/components/ItemCard';
-import { PIPELINE_COLUMNS, HUMAN_GATE_STATUSES } from '@/lib/constants';
+import { type PipelineItem } from '@/components/ItemCard';
+import { PRIORITY_CONFIG, REPO_CONFIG, STATUS_LABELS, timeAgo } from '@/lib/constants';
+// Inline mini copy button — no external dependency
+
+/* ─── Section definitions ─── */
+
+type SectionDef = {
+  key: string;
+  label: string;
+  description: string;
+  icon: string;
+  accentBg: string;
+  accentText: string;
+  statuses: string[];
+  defaultOpen: boolean;
+};
+
+const SECTIONS: SectionDef[] = [
+  {
+    key: 'action',
+    label: 'Action needed',
+    description: 'You need to review, test, or approve these items to keep them moving.',
+    icon: '!',
+    accentBg: '#FEE2E2',
+    accentText: '#991B1B',
+    statuses: ['human_review', 'testing_in_dev', 'design_review_hold', 'promotion_review'],
+    defaultOpen: true,
+  },
+  {
+    key: 'autonomous',
+    label: 'Autonomous',
+    description: 'Conductor is actively building or reviewing. No action needed — monitor only.',
+    icon: '\u2699',
+    accentBg: '#DBEAFE',
+    accentText: '#1E40AF',
+    statuses: ['approved', 'executing', 'qa'],
+    defaultOpen: true,
+  },
+  {
+    key: 'design',
+    label: 'In design',
+    description: 'Being designed in Hub conversations. Open a chat to continue.',
+    icon: '\u270F',
+    accentBg: '#EDE9FE',
+    accentText: '#6D28D9',
+    statuses: ['designing', 'cross_review', 'design_conflict'],
+    defaultOpen: true,
+  },
+  {
+    key: 'queue',
+    label: 'Queue',
+    description: 'Waiting for a Hub design session to get started. Prioritized by P-level.',
+    icon: '\u2630',
+    accentBg: 'var(--color-stone-100)',
+    accentText: 'var(--color-stone-600)',
+    statuses: ['intake', 'awaiting_hub_design'],
+    defaultOpen: false,
+  },
+  {
+    key: 'promoting',
+    label: 'Promoting',
+    description: 'Verified and moving through the promotion pipeline to production.',
+    icon: '\u2191',
+    accentBg: '#F3E8FF',
+    accentText: '#7C3AED',
+    statuses: ['promoting', 'waiting_migration', 'waiting_prod_evidence'],
+    defaultOpen: true,
+  },
+  {
+    key: 'blocked',
+    label: 'Blocked',
+    description: 'Stuck — needs manual intervention or a dependency resolved.',
+    icon: '\u26A0',
+    accentBg: '#FEF3C7',
+    accentText: '#92400E',
+    statuses: ['blocked', 'readiness_blocked', 'waiting_on_dependency', 'decomposed'],
+    defaultOpen: true,
+  },
+  {
+    key: 'done',
+    label: 'Done',
+    description: 'Completed and deployed. No further action.',
+    icon: '\u2713',
+    accentBg: '#D1FAE5',
+    accentText: '#065F46',
+    statuses: ['done', 'subtasks_complete'],
+    defaultOpen: false,
+  },
+];
+
+/* ─── Action summaries ─── */
+
+function getActionLine(status: string): string {
+  switch (status) {
+    case 'human_review': return 'Approve design or request changes';
+    case 'testing_in_dev': return 'Verify changes on dev, then promote';
+    case 'design_review_hold': return 'Review QA escalation findings';
+    case 'promotion_review': return 'Approve production deploy';
+    case 'approved': return 'Worker assigned, build starting';
+    case 'executing': return 'Worker actively writing code';
+    case 'qa': return 'Build complete, running QA checks';
+    case 'designing': return 'Claude drafting solution design';
+    case 'cross_review': return 'Codex reviewing Claude design';
+    case 'design_conflict': return 'Design conflict — needs resolution';
+    case 'intake': return 'Waiting for design session';
+    case 'awaiting_hub_design': return 'Start Hub chat to begin design';
+    case 'promoting': return 'Deploying to production';
+    case 'waiting_migration': return 'Running migrations';
+    case 'waiting_prod_evidence': return 'Collecting deploy evidence';
+    case 'blocked': return 'Manual intervention needed';
+    case 'readiness_blocked': return 'Prerequisites missing';
+    case 'waiting_on_dependency': return 'Waiting on another item';
+    case 'decomposed': return 'Split into subtasks';
+    case 'done': return 'Deployed and verified';
+    case 'subtasks_complete': return 'All subtasks finished';
+    default: return status;
+  }
+}
+
+/* ─── Component ─── */
 
 interface PipelineBoardProps {
   initialItems: PipelineItem[];
 }
 
-const TERMINAL_STATUSES = ['done', 'subtasks_complete'];
-const RECENCY_MS = 72 * 60 * 60 * 1000;
 const PULL_THRESHOLD = 80;
 
 export function PipelineBoard({ initialItems }: PipelineBoardProps) {
@@ -20,25 +137,18 @@ export function PipelineBoard({ initialItems }: PipelineBoardProps) {
   );
 
   const [repoFilter, setRepoFilter] = useState<string>('all');
-  const [priorityFilter, setPriorityFilter] = useState<string>('all');
-  const [myAttention, setMyAttention] = useState(false);
-  const [activeOnly, setActiveOnly] = useState(true);
+  const [collapsed, setCollapsed] = useState<Set<string>>(() => {
+    const set = new Set<string>();
+    for (const s of SECTIONS) {
+      if (!s.defaultOpen) set.add(s.key);
+    }
+    return set;
+  });
 
   // Pull-to-refresh
   const [pullDistance, setPullDistance] = useState(0);
   const [refreshing, setRefreshing] = useState(false);
   const touchStartY = useRef(0);
-
-  // Collapsed status sections (mobile list view)
-  const [collapsedSections, setCollapsedSections] = useState<Set<string>>(new Set());
-
-  const toggleSection = (key: string) => {
-    setCollapsedSections((prev) => {
-      const next = new Set(prev);
-      if (next.has(key)) { next.delete(key); } else { next.add(key); }
-      return next;
-    });
-  };
 
   // Sticky repo filter
   useEffect(() => {
@@ -55,17 +165,23 @@ export function PipelineBoard({ initialItems }: PipelineBoardProps) {
     try { localStorage.setItem('cortex-repo-filter', value); } catch { /* */ }
   };
 
-  // Pull-to-refresh handlers
+  const toggleSection = (key: string) => {
+    setCollapsed((prev) => {
+      const next = new Set(prev);
+      if (next.has(key)) { next.delete(key); } else { next.add(key); }
+      return next;
+    });
+  };
+
+  // Pull-to-refresh
   const handleTouchStart = useCallback((e: React.TouchEvent) => {
     if (window.scrollY === 0) touchStartY.current = e.touches[0].clientY;
   }, []);
-
   const handleTouchMove = useCallback((e: React.TouchEvent) => {
     if (refreshing || window.scrollY > 0) return;
     const diff = e.touches[0].clientY - touchStartY.current;
     if (diff > 0) setPullDistance(Math.min(diff * 0.5, PULL_THRESHOLD + 20));
   }, [refreshing]);
-
   const handleTouchEnd = useCallback(async () => {
     if (pullDistance >= PULL_THRESHOLD && !refreshing) {
       setRefreshing(true);
@@ -76,58 +192,32 @@ export function PipelineBoard({ initialItems }: PipelineBoardProps) {
     setPullDistance(0);
   }, [pullDistance, refreshing, refresh]);
 
-  // Batch progress across ALL items
-  const batchProgress = useMemo(() => {
-    const progress: Record<string, { total: number; done: number }> = {};
-    for (const item of items) {
-      if (!item.batch_id) continue;
-      if (!progress[item.batch_id]) progress[item.batch_id] = { total: 0, done: 0 };
-      progress[item.batch_id].total++;
-      if (item.status === 'done' || item.status === 'subtasks_complete') {
-        progress[item.batch_id].done++;
-      }
-    }
-    return progress;
-  }, [items]);
+  // Filter items
+  const filtered = useMemo(() => {
+    if (repoFilter === 'all') return items;
+    return items.filter((i) => i.repo === repoFilter);
+  }, [items, repoFilter]);
 
-  const filteredItems = useMemo(() => {
-    const now = Date.now();
-    return items.filter((item) => {
-      if (repoFilter !== 'all' && item.repo !== repoFilter) return false;
-      if (priorityFilter !== 'all' && item.priority !== priorityFilter) return false;
-      if (myAttention && !HUMAN_GATE_STATUSES.includes(item.status as typeof HUMAN_GATE_STATUSES[number])) return false;
-      if (activeOnly) {
-        if (TERMINAL_STATUSES.includes(item.status)) return false;
-        if (now - new Date(item.updated_at).getTime() > RECENCY_MS) return false;
-      }
-      return true;
-    });
-  }, [items, repoFilter, priorityFilter, myAttention, activeOnly]);
+  // Build sections
+  const sectionData = useMemo(() => {
+    return SECTIONS.map((sec) => {
+      const sectionItems = filtered
+        .filter((item) => sec.statuses.includes(item.status))
+        .sort((a, b) => {
+          // Priority first for queue, recency first for everything else
+          if (sec.key === 'queue') {
+            const pOrder = ['p0', 'p1', 'p2', 'p3'];
+            const pDiff = pOrder.indexOf(a.priority) - pOrder.indexOf(b.priority);
+            if (pDiff !== 0) return pDiff;
+          }
+          return new Date(b.updated_at).getTime() - new Date(a.updated_at).getTime();
+        });
+      return { ...sec, items: sectionItems };
+    }).filter((sec) => sec.items.length > 0);
+  }, [filtered]);
 
-  // Column data with batch grouping
-  const columnData = useMemo(() => {
-    return PIPELINE_COLUMNS.map((col) => {
-      const colItems = filteredItems
-        .filter((item) => col.statuses.includes(item.status))
-        .sort((a, b) => new Date(b.updated_at).getTime() - new Date(a.updated_at).getTime());
-
-      const batched: Record<string, PipelineItem[]> = {};
-      const unbatched: PipelineItem[] = [];
-
-      for (const item of colItems) {
-        if (item.batch_id) {
-          if (!batched[item.batch_id]) batched[item.batch_id] = [];
-          batched[item.batch_id].push(item);
-        } else {
-          unbatched.push(item);
-        }
-      }
-
-      return { ...col, items: colItems, batched, unbatched };
-    });
-  }, [filteredItems]);
-
-  const totalCount = filteredItems.length;
+  const actionCount = sectionData.find(s => s.key === 'action')?.items.length ?? 0;
+  const totalActive = sectionData.reduce((sum, s) => s.key !== 'done' ? sum + s.items.length : sum, 0);
 
   return (
     <div
@@ -135,128 +225,70 @@ export function PipelineBoard({ initialItems }: PipelineBoardProps) {
       onTouchMove={handleTouchMove}
       onTouchEnd={handleTouchEnd}
     >
-      {/* Pull-to-refresh indicator */}
+      {/* Pull-to-refresh */}
       {(pullDistance > 0 || refreshing) && (
-        <div
-          className="flex items-center justify-center overflow-hidden transition-[height] duration-200"
-          style={{ height: refreshing ? 40 : pullDistance > 0 ? pullDistance : 0 }}
-        >
+        <div className="flex items-center justify-center overflow-hidden transition-[height] duration-200"
+          style={{ height: refreshing ? 40 : pullDistance > 0 ? pullDistance : 0 }}>
           <span className={`text-xs text-[var(--muted-foreground)] ${refreshing ? 'animate-pulse' : ''}`}>
             {refreshing ? 'Refreshing...' : pullDistance >= PULL_THRESHOLD ? 'Release to refresh' : 'Pull to refresh'}
           </span>
         </div>
       )}
 
-      {/* Compact filters */}
-      <div className="mb-3 flex items-center gap-1.5 overflow-x-auto pb-1 lg:gap-2 lg:pb-0">
-        <button
-          onClick={() => setActiveOnly((v) => !v)}
-          className={`shrink-0 rounded-[8px] border px-2.5 py-1 text-xs font-medium transition-colors lg:px-3 lg:py-1.5 lg:text-sm ${
-            activeOnly
-              ? 'border-emerald-500 bg-emerald-50 text-emerald-700 dark:border-emerald-600 dark:bg-emerald-950 dark:text-emerald-300'
-              : 'border-[var(--border)] bg-[var(--background)] text-[var(--foreground)]'
-          }`}
-        >
-          Active now
-        </button>
-
+      {/* Summary bar */}
+      <div className="mb-3 flex items-center gap-2">
         <select
           value={repoFilter}
           onChange={(e) => handleRepoChange(e.target.value)}
-          className="shrink-0 rounded-[8px] border border-[var(--border)] bg-[var(--background)] px-2 py-1 text-xs lg:px-3 lg:py-1.5 lg:text-sm"
+          className="rounded-[8px] border border-[var(--border)] bg-[var(--background)] px-2 py-1 text-xs"
         >
           <option value="all">All repos</option>
           <option value="kertec-field-app-v2">KerTec</option>
           <option value="bs-box-web">BS Box</option>
           <option value="cortex-dev">Cortex</option>
         </select>
-
-        <select
-          value={priorityFilter}
-          onChange={(e) => setPriorityFilter(e.target.value)}
-          className="shrink-0 rounded-[8px] border border-[var(--border)] bg-[var(--background)] px-2 py-1 text-xs lg:px-3 lg:py-1.5 lg:text-sm"
-        >
-          <option value="all">All priorities</option>
-          <option value="p0">P0</option>
-          <option value="p1">P1</option>
-          <option value="p2">P2</option>
-        </select>
-
-        <button
-          onClick={() => setMyAttention((v) => !v)}
-          className={`shrink-0 rounded-[8px] border px-2.5 py-1 text-xs transition-colors lg:px-3 lg:py-1.5 lg:text-sm ${
-            myAttention
-              ? 'border-[var(--primary)] bg-[var(--primary)] text-white'
-              : 'border-[var(--border)] bg-[var(--background)] text-[var(--foreground)]'
-          }`}
-        >
-          My attention
-        </button>
-
-        <span className="ml-auto shrink-0 text-[11px] text-[var(--muted-foreground)] lg:text-xs">
-          {totalCount} items
+        <span className="ml-auto text-[11px] text-[var(--muted-foreground)]">
+          {actionCount > 0 && (
+            <span className="mr-2 font-semibold text-red-500">{actionCount} need action</span>
+          )}
+          {totalActive} active
         </span>
       </div>
 
-      {/* ─── MOBILE: Vertical list view ─── */}
-      <div className="space-y-2 lg:hidden">
-        {columnData.map((col) => {
-          if (col.collapsed && col.items.length === 0) return null;
-          if (col.items.length === 0) return null;
-
-          const isCollapsed = collapsedSections.has(col.key);
-          const batchIds = Object.keys(col.batched);
-
+      {/* Sections */}
+      <div className="space-y-2">
+        {sectionData.map((sec) => {
+          const isCollapsed = collapsed.has(sec.key);
           return (
-            <div key={col.key} className="rounded-[10px] border border-[var(--border)] bg-[var(--muted)]">
-              {/* Status header — tappable to collapse */}
+            <div key={sec.key} className="rounded-[10px] border border-[var(--border)] bg-[var(--muted)]">
+              {/* Section header */}
               <button
-                onClick={() => toggleSection(col.key)}
-                className="flex w-full items-center justify-between rounded-t-[10px] px-3 py-2"
-                style={{ background: col.bgClass }}
+                onClick={() => toggleSection(sec.key)}
+                className="flex w-full items-center gap-2 rounded-t-[10px] px-3 py-2"
+                style={{ background: sec.accentBg }}
               >
-                <div className="flex items-center gap-2">
-                  <svg
-                    className={`h-3.5 w-3.5 transition-transform ${isCollapsed ? '' : 'rotate-90'}`}
-                    style={{ color: col.textClass }}
-                    fill="currentColor"
-                    viewBox="0 0 20 20"
-                  >
-                    <path fillRule="evenodd" d="M7.21 14.77a.75.75 0 01.02-1.06L11.168 10 7.23 6.29a.75.75 0 111.04-1.08l4.5 4.25a.75.75 0 010 1.08l-4.5 4.25a.75.75 0 01-1.06-.02z" clipRule="evenodd" />
-                  </svg>
-                  <span
-                    className="text-xs font-semibold uppercase tracking-wider"
-                    style={{ color: col.textClass }}
-                  >
-                    {col.label}
-                  </span>
-                </div>
-                <span
-                  className="flex h-5 min-w-5 items-center justify-center rounded-full text-[10px] font-bold"
-                  style={{ background: col.textClass, color: col.bgClass }}
-                >
-                  {col.items.length}
+                <svg className={`h-3 w-3 shrink-0 transition-transform ${isCollapsed ? '' : 'rotate-90'}`}
+                  style={{ color: sec.accentText }} fill="currentColor" viewBox="0 0 20 20">
+                  <path fillRule="evenodd" d="M7.21 14.77a.75.75 0 01.02-1.06L11.168 10 7.23 6.29a.75.75 0 111.04-1.08l4.5 4.25a.75.75 0 010 1.08l-4.5 4.25a.75.75 0 01-1.06-.02z" clipRule="evenodd" />
+                </svg>
+                <span className="text-sm font-semibold" style={{ color: sec.accentText }}>
+                  {sec.icon} {sec.label}
+                </span>
+                <span className="flex h-5 min-w-5 items-center justify-center rounded-full text-[10px] font-bold"
+                  style={{ background: sec.accentText, color: sec.accentBg }}>
+                  {sec.items.length}
                 </span>
               </button>
 
-              {/* Description + Items */}
               {!isCollapsed && (
                 <div className="p-1.5">
                   <p className="mb-1.5 px-1.5 text-[10px] leading-relaxed text-[var(--muted-foreground)]">
-                    {col.description}
+                    {sec.description}
                   </p>
-                  <div className="space-y-1.5">
-                  {batchIds.map((batchId) => (
-                    <BatchGroup
-                      key={batchId}
-                      batchId={batchId}
-                      items={col.batched[batchId]}
-                      progress={batchProgress[batchId]}
-                    />
-                  ))}
-                  {col.unbatched.map((item) => (
-                    <ItemCard key={item.id} item={item} />
-                  ))}
+                  <div className="space-y-1">
+                    {sec.items.map((item) => (
+                      <CompactItemCard key={item.id} item={item} showAction={sec.key === 'action'} />
+                    ))}
                   </div>
                 </div>
               )}
@@ -264,125 +296,95 @@ export function PipelineBoard({ initialItems }: PipelineBoardProps) {
           );
         })}
 
-        {totalCount === 0 && (
+        {sectionData.length === 0 && (
           <div className="rounded-[10px] border border-[var(--border)] bg-[var(--card)] px-6 py-12 text-center">
-            <p className="text-sm text-[var(--muted-foreground)]">No items match current filters</p>
+            <p className="text-sm text-[var(--muted-foreground)]">No items match current filter</p>
           </div>
         )}
-      </div>
-
-      {/* ─── DESKTOP: Horizontal kanban ─── */}
-      <div className="hidden lg:block">
-        <div className="overflow-x-auto pb-4">
-          <div className="flex gap-3" style={{ minWidth: `${columnData.filter(c => !c.collapsed || c.items.length > 0).length * 260}px` }}>
-            {columnData.map((col) => {
-              if (col.collapsed && col.items.length === 0) return null;
-              const batchIds = Object.keys(col.batched);
-
-              return (
-                <div
-                  key={col.key}
-                  className="w-[250px] shrink-0 rounded-[10px] border border-[var(--border)] bg-[var(--muted)]"
-                >
-                  <div
-                    className="flex items-center justify-between rounded-t-[10px] px-3 py-2"
-                    style={{ background: col.bgClass }}
-                  >
-                    <span className="text-xs font-semibold uppercase tracking-wider" style={{ color: col.textClass }}>
-                      {col.label}
-                    </span>
-                    <span
-                      className="flex h-5 min-w-5 items-center justify-center rounded-full text-[10px] font-bold"
-                      style={{ background: col.textClass, color: col.bgClass }}
-                    >
-                      {col.items.length}
-                    </span>
-                  </div>
-
-                  <p className="px-3 py-1.5 text-[9px] leading-relaxed text-[var(--muted-foreground)]">
-                    {col.description}
-                  </p>
-
-                  <div className="space-y-2 px-2 pb-2" style={{ minHeight: '40px' }}>
-                    {col.items.length === 0 ? (
-                      <div className="py-4 text-center text-xs text-[var(--muted-foreground)]">Empty</div>
-                    ) : (
-                      <>
-                        {batchIds.map((batchId) => (
-                          <BatchGroup
-                            key={batchId}
-                            batchId={batchId}
-                            items={col.batched[batchId]}
-                            progress={batchProgress[batchId]}
-                          />
-                        ))}
-                        {col.unbatched.map((item) => (
-                          <ItemCard key={item.id} item={item} />
-                        ))}
-                      </>
-                    )}
-                  </div>
-                </div>
-              );
-            })}
-          </div>
-        </div>
       </div>
     </div>
   );
 }
 
-/* ─── Batch group ─── */
+/* ─── Compact item card with action line ─── */
 
-function BatchGroup({
-  batchId,
-  items,
-  progress,
-}: {
-  batchId: string;
-  items: PipelineItem[];
-  progress?: { total: number; done: number };
-}) {
-  const [collapsed, setCollapsed] = useState(false);
+function CompactItemCard({ item, showAction }: { item: PipelineItem; showAction: boolean }) {
+  const sid = item.id.substring(0, 8).toUpperCase();
+  const priority = PRIORITY_CONFIG[item.priority] ?? PRIORITY_CONFIG.p3;
+  const repo = REPO_CONFIG[item.repo] ?? { label: item.repo, bg: 'var(--color-stone-100)', text: 'var(--color-stone-600)' };
+  const statusLabel = STATUS_LABELS[item.status] ?? item.status;
+  const actionLine = getActionLine(item.status);
 
-  const displayName = batchId
-    .replace(/[-_]\d{8,14}$/g, '')
-    .replace(/[-_]\d{4}_\d{2}_\d{2}.*$/g, '')
-    .replace(/[_-]/g, ' ')
-    .trim();
+  const bootPrompt = `Boot up conductor item ${sid}.\n\nSteps:\n1. Run mandatory timestamp.\n2. Query live state from Supabase (project ftpbxlizcsbzvmtbtuef):\n   - Item: SELECT * FROM agentic_items WHERE UPPER(LEFT(id::text, 8)) = '${sid}'\n   - Messages, revisions, jobs, workers for item_id = '${item.id}'\n3. Repo is ${item.repo} — read relevant source from VPS.\n4. Report full context and recommend next action.\n\nBegin.`;
 
   return (
-    <div className="rounded-[8px] border border-dashed border-[var(--border)]">
-      <button
-        onClick={() => setCollapsed((v) => !v)}
-        className="flex w-full items-center gap-1.5 px-2.5 py-1.5 text-left"
-      >
-        <svg
-          className={`h-3 w-3 shrink-0 text-[var(--muted-foreground)] transition-transform ${collapsed ? '' : 'rotate-90'}`}
-          fill="currentColor"
-          viewBox="0 0 20 20"
-        >
-          <path fillRule="evenodd" d="M7.21 14.77a.75.75 0 01.02-1.06L11.168 10 7.23 6.29a.75.75 0 111.04-1.08l4.5 4.25a.75.75 0 010 1.08l-4.5 4.25a.75.75 0 01-1.06-.02z" clipRule="evenodd" />
-        </svg>
-        <span className="min-w-0 flex-1 truncate text-[10px] font-semibold text-[var(--muted-foreground)]">
-          {displayName}
+    <div className="rounded-[8px] border border-[var(--border)] bg-[var(--card)] p-2.5">
+      {/* Row 1: SID + priority + repo + time */}
+      <div className="flex items-center gap-1.5">
+        <Link href={`/pipeline/${item.id}`} className="font-mono text-[11px] font-bold text-[var(--primary)] active:underline">
+          {sid}
+        </Link>
+        <span className="rounded-[4px] px-1 py-0.5 text-[8px] font-bold"
+          style={{ background: priority.bg, color: priority.text }}>
+          {priority.label}
         </span>
-        {progress && (
-          <span className="shrink-0 text-[10px] text-[var(--muted-foreground)]">
-            {progress.done}/{progress.total}
-          </span>
+        <span className="rounded-[4px] px-1 py-0.5 text-[8px] font-medium"
+          style={{ background: repo.bg, color: repo.text }}>
+          {repo.label}
+        </span>
+        {item.escalated_at && (
+          <span className="text-[10px] text-amber-500" title={item.escalation_reason ?? 'Escalated'}>&#9888;</span>
         )}
-        <span className="flex h-4 min-w-4 items-center justify-center rounded-full bg-[var(--muted)] text-[9px] font-bold text-[var(--muted-foreground)]">
-          {items.length}
+        <span className="ml-auto text-[9px] text-[var(--muted-foreground)]">
+          {timeAgo(item.updated_at)}
         </span>
-      </button>
-      {!collapsed && (
-        <div className="space-y-1.5 px-1.5 pb-1.5">
-          {items.map((item) => (
-            <ItemCard key={item.id} item={item} />
-          ))}
-        </div>
-      )}
+      </div>
+
+      {/* Row 2: Title */}
+      <p className="mt-1 line-clamp-1 text-[12px] leading-snug text-[var(--foreground)]">
+        {item.title}
+      </p>
+
+      {/* Row 3: Action line + boot button */}
+      <div className="mt-1 flex items-center gap-2">
+        <span className={`flex-1 text-[10px] ${showAction ? 'font-semibold text-red-600 dark:text-red-400' : 'text-[var(--muted-foreground)]'}`}>
+          {showAction ? '\u2794 ' : ''}{actionLine}
+        </span>
+        <MiniCopyButton text={bootPrompt} />
+      </div>
     </div>
+  );
+}
+
+/* ─── Mini copy button ─── */
+
+function MiniCopyButton({ text }: { text: string }) {
+  const [copied, setCopied] = useState(false);
+  const handleCopy = async () => {
+    try {
+      await navigator.clipboard.writeText(text);
+    } catch {
+      const ta = document.createElement('textarea');
+      ta.value = text;
+      ta.style.position = 'fixed';
+      ta.style.opacity = '0';
+      document.body.appendChild(ta);
+      ta.select();
+      document.execCommand('copy');
+      document.body.removeChild(ta);
+    }
+    setCopied(true);
+    setTimeout(() => setCopied(false), 1500);
+  };
+
+  return (
+    <button onClick={handleCopy}
+      className={`shrink-0 rounded-[6px] border px-2 py-0.5 text-[9px] font-medium transition-colors ${
+        copied
+          ? 'border-emerald-300 bg-emerald-50 text-emerald-700 dark:border-emerald-700 dark:bg-emerald-950 dark:text-emerald-300'
+          : 'border-[var(--border)] text-[var(--muted-foreground)] active:bg-[var(--muted)]'
+      }`}>
+      {copied ? '\u2713 Copied' : 'Boot'}
+    </button>
   );
 }

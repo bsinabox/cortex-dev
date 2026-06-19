@@ -16,7 +16,7 @@ export default async function PipelinePage() {
   if (error) {
     return (
       <div>
-        <h1 className="text-xl font-semibold tracking-tight lg:text-2xl">Pipeline</h1>
+        <h1 className="text-xl font-semibold tracking-tight">Pipeline</h1>
         <div className="mt-4 rounded-[10px] border border-red-200 bg-red-50 p-4 text-sm text-red-700">
           <p className="font-medium">Failed to load pipeline data</p>
           <p className="mt-1 font-mono text-xs">{error.message}</p>
@@ -41,9 +41,6 @@ export default async function PipelinePage() {
   return (
     <div>
       <h1 className="text-xl font-semibold tracking-tight lg:text-2xl">Pipeline</h1>
-      <p className="mb-3 mt-0.5 text-xs text-[var(--muted-foreground)] lg:mb-4 lg:mt-1 lg:text-sm">
-        Conductor items by status
-      </p>
       <PipelineBoard initialItems={items} />
     </div>
   );
