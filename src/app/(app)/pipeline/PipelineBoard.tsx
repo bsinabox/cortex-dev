@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, useMemo, useEffect } from 'react';
+import { useState, useMemo, useEffect, useRef, useCallback } from 'react';
 import { useRealtimeTable } from '@/hooks/useRealtimeTable';
 import { ItemCard, type PipelineItem } from '@/components/ItemCard';
 import { PIPELINE_COLUMNS, HUMAN_GATE_STATUSES } from '@/lib/constants';
@@ -11,9 +11,10 @@ interface PipelineBoardProps {
 
 const TERMINAL_STATUSES = ['done', 'subtasks_complete'];
 const RECENCY_MS = 72 * 60 * 60 * 1000; // 72 hours
+const PULL_THRESHOLD = 80; // px to trigger refresh
 
 export function PipelineBoard({ initialItems }: PipelineBoardProps) {
-  const { data: items } = useRealtimeTable<PipelineItem>(
+  const { data: items, refresh } = useRealtimeTable<PipelineItem>(
     'agentic_items',
     initialItems
   );
@@ -22,6 +23,12 @@ export function PipelineBoard({ initialItems }: PipelineBoardProps) {
   const [priorityFilter, setPriorityFilter] = useState<string>('all');
   const [myAttention, setMyAttention] = useState(false);
   const [activeOnly, setActiveOnly] = useState(true);
+
+  // Pull-to-refresh state
+  const [pullDistance, setPullDistance] = useState(0);
+  const [refreshing, setRefreshing] = useState(false);
+  const touchStartY = useRef(0);
+  const containerRef = useRef<HTMLDivElement>(null);
 
   // Sticky repo filter — load from localStorage on mount
   useEffect(() => {
@@ -43,6 +50,31 @@ export function PipelineBoard({ initialItems }: PipelineBoardProps) {
       // localStorage unavailable
     }
   };
+
+  // Pull-to-refresh handlers
+  const handleTouchStart = useCallback((e: React.TouchEvent) => {
+    if (window.scrollY === 0) {
+      touchStartY.current = e.touches[0].clientY;
+    }
+  }, []);
+
+  const handleTouchMove = useCallback((e: React.TouchEvent) => {
+    if (refreshing || window.scrollY > 0) return;
+    const diff = e.touches[0].clientY - touchStartY.current;
+    if (diff > 0) {
+      setPullDistance(Math.min(diff * 0.5, PULL_THRESHOLD + 20));
+    }
+  }, [refreshing]);
+
+  const handleTouchEnd = useCallback(async () => {
+    if (pullDistance >= PULL_THRESHOLD && !refreshing) {
+      setRefreshing(true);
+      setPullDistance(PULL_THRESHOLD);
+      await refresh();
+      setRefreshing(false);
+    }
+    setPullDistance(0);
+  }, [pullDistance, refreshing, refresh]);
 
   // Batch progress across ALL items (not just filtered)
   const batchProgress = useMemo(() => {
@@ -104,7 +136,24 @@ export function PipelineBoard({ initialItems }: PipelineBoardProps) {
   const totalCount = filteredItems.length;
 
   return (
-    <div>
+    <div
+      ref={containerRef}
+      onTouchStart={handleTouchStart}
+      onTouchMove={handleTouchMove}
+      onTouchEnd={handleTouchEnd}
+    >
+      {/* Pull-to-refresh indicator */}
+      {(pullDistance > 0 || refreshing) && (
+        <div
+          className="flex items-center justify-center overflow-hidden transition-[height] duration-200"
+          style={{ height: refreshing ? 40 : pullDistance > 0 ? pullDistance : 0 }}
+        >
+          <div className={`text-xs text-[var(--muted-foreground)] ${refreshing ? 'animate-pulse' : ''}`}>
+            {refreshing ? 'Refreshing...' : pullDistance >= PULL_THRESHOLD ? 'Release to refresh' : 'Pull to refresh'}
+          </div>
+        </div>
+      )}
+
       {/* Filters */}
       <div className="mb-4 flex flex-wrap items-center gap-2">
         <button

@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, useCallback } from 'react';
+import { useState, useCallback, useEffect } from 'react';
 import { useRealtimeTable } from '@/hooks/useRealtimeTable';
 import {
   CONFIG_DISPLAY_KEYS,
@@ -41,6 +41,8 @@ interface HealthDashboardProps {
   isOperator: boolean;
 }
 
+const SOAK_DURATION_MS = 48 * 60 * 60 * 1000; // 48 hours
+
 export function HealthDashboard({ initialConfig, initialOpsLog, isOperator }: HealthDashboardProps) {
   // Use 'key' as ID field for agentic_config (Codex P4 finding #2)
   const { data: configRows } = useRealtimeTable<ConfigRow>(
@@ -52,6 +54,13 @@ export function HealthDashboard({ initialConfig, initialOpsLog, isOperator }: He
     VPS_SERVICES.map((s) => ({ ...s, active: false, status: 'unchecked', loading: false }))
   );
   const [vpsOutput, setVpsOutput] = useState<Record<string, { loading: boolean; result?: string; error?: string }>>({});
+  const [soakNow, setSoakNow] = useState(Date.now());
+
+  // Tick every 30s for soak countdown
+  useEffect(() => {
+    const timer = setInterval(() => setSoakNow(Date.now()), 30000);
+    return () => clearInterval(timer);
+  }, []);
 
   // Build config map
   const configMap = configRows.reduce<Record<string, { value: unknown; updated_at: string }>>((acc, row) => {
@@ -66,6 +75,25 @@ export function HealthDashboard({ initialConfig, initialOpsLog, isOperator }: He
 
   const lastHeartbeat = configMap.last_heartbeat_at?.value;
   const heartbeatStr = typeof lastHeartbeat === 'string' ? lastHeartbeat : null;
+
+  // Soak data
+  const heartbeatKillEnabled = configMap.heartbeat_kill_enabled?.value === true;
+  const cutoverAtRaw = configMap.heartbeat_cutover_at?.value;
+  const cutoverAt = typeof cutoverAtRaw === 'string' ? new Date(cutoverAtRaw).getTime() : null;
+  const soakEndAt = cutoverAt ? cutoverAt + SOAK_DURATION_MS : null;
+  const soakElapsed = cutoverAt ? soakNow - cutoverAt : 0;
+  const soakRemaining = soakEndAt ? Math.max(0, soakEndAt - soakNow) : 0;
+  const soakProgress = cutoverAt ? Math.min(100, (soakElapsed / SOAK_DURATION_MS) * 100) : 0;
+  const soakComplete = soakRemaining === 0 && cutoverAt !== null;
+
+  // Format remaining time as Xh Ym
+  const formatRemaining = (ms: number) => {
+    if (ms <= 0) return 'Complete';
+    const totalMin = Math.floor(ms / 60000);
+    const h = Math.floor(totalMin / 60);
+    const m = totalMin % 60;
+    return h > 0 ? `${h}h ${m}m remaining` : `${m}m remaining`;
+  };
 
   // Check all services
   const checkAllServices = useCallback(async () => {
@@ -161,6 +189,50 @@ export function HealthDashboard({ initialConfig, initialOpsLog, isOperator }: He
           </p>
         </div>
       </div>
+
+      {/* Heartbeat soak countdown */}
+      {heartbeatKillEnabled && cutoverAt && (
+        <div className={`rounded-[10px] border p-4 ${
+          soakComplete
+            ? 'border-emerald-300 bg-emerald-50 dark:border-emerald-700 dark:bg-emerald-950'
+            : 'border-amber-300 bg-amber-50 dark:border-amber-700 dark:bg-amber-950'
+        }`}>
+          <div className="flex items-center justify-between">
+            <div>
+              <p className="text-xs font-medium uppercase tracking-wider text-[var(--muted-foreground)]">
+                48h Heartbeat Soak
+              </p>
+              <p className={`mt-1 text-lg font-bold ${
+                soakComplete ? 'text-emerald-700 dark:text-emerald-300' : 'text-amber-700 dark:text-amber-300'
+              }`}>
+                {soakComplete ? '✓ Soak Complete' : formatRemaining(soakRemaining)}
+              </p>
+            </div>
+            <div className="text-right">
+              <p className="font-mono text-[10px] text-[var(--muted-foreground)]">
+                Started: {new Date(cutoverAt).toLocaleString()}
+              </p>
+              {soakEndAt && (
+                <p className="font-mono text-[10px] text-[var(--muted-foreground)]">
+                  Ends: {new Date(soakEndAt).toLocaleString()}
+                </p>
+              )}
+            </div>
+          </div>
+          {/* Progress bar */}
+          <div className="mt-3 h-2 overflow-hidden rounded-full bg-white/50 dark:bg-black/20">
+            <div
+              className={`h-full rounded-full transition-all duration-500 ${
+                soakComplete ? 'bg-emerald-500' : 'bg-amber-500'
+              }`}
+              style={{ width: `${soakProgress}%` }}
+            />
+          </div>
+          <p className="mt-1 text-right text-[10px] text-[var(--muted-foreground)]">
+            {soakProgress.toFixed(1)}%
+          </p>
+        </div>
+      )}
 
       {/* Service status */}
       <div className="rounded-[10px] border border-[var(--border)] bg-[var(--card)]">

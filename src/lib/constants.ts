@@ -178,6 +178,8 @@ export const CONFIG_DISPLAY_KEYS = [
   'transition_guard_mode',
   'decomposition_mode',
   'active_batch',
+  'heartbeat_kill_enabled',
+  'heartbeat_cutover_at',
   'last_heartbeat_at',
 ] as const;
 

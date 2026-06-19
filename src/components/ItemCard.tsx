@@ -4,6 +4,7 @@ import Link from 'next/link';
 import {
   PRIORITY_CONFIG,
   REPO_CONFIG,
+  STATUS_LABELS,
   timeAgo,
 } from '@/lib/constants';
 
@@ -28,6 +29,7 @@ export function ItemCard({ item }: ItemCardProps) {
   const sid = item.id.substring(0, 8).toUpperCase();
   const priority = PRIORITY_CONFIG[item.priority] ?? PRIORITY_CONFIG.p3;
   const repo = REPO_CONFIG[item.repo] ?? { label: item.repo, bg: 'var(--color-stone-100)', text: 'var(--color-stone-600)' };
+  const statusLabel = STATUS_LABELS[item.status] ?? item.status;
 
   return (
     <Link
@@ -61,7 +63,7 @@ export function ItemCard({ item }: ItemCardProps) {
         {item.title}
       </p>
 
-      {/* Footer: repo + time ago */}
+      {/* Footer: repo + status + time-in-status */}
       <div className="mt-2 flex items-center justify-between gap-2">
         <span
           className="inline-flex rounded-[6px] px-1.5 py-0.5 text-[10px] font-medium"
@@ -70,7 +72,7 @@ export function ItemCard({ item }: ItemCardProps) {
           {repo.label}
         </span>
         <span className="text-[11px] text-[var(--muted-foreground)]">
-          {timeAgo(item.updated_at)}
+          {statusLabel} · {timeAgo(item.updated_at)}
         </span>
       </div>
     </Link>
