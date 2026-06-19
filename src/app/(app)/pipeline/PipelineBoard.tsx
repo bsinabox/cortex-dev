@@ -10,8 +10,8 @@ interface PipelineBoardProps {
 }
 
 const TERMINAL_STATUSES = ['done', 'subtasks_complete'];
-const RECENCY_MS = 72 * 60 * 60 * 1000; // 72 hours
-const PULL_THRESHOLD = 80; // px to trigger refresh
+const RECENCY_MS = 72 * 60 * 60 * 1000;
+const PULL_THRESHOLD = 80;
 
 export function PipelineBoard({ initialItems }: PipelineBoardProps) {
   const { data: items, refresh } = useRealtimeTable<PipelineItem>(
@@ -24,46 +24,46 @@ export function PipelineBoard({ initialItems }: PipelineBoardProps) {
   const [myAttention, setMyAttention] = useState(false);
   const [activeOnly, setActiveOnly] = useState(true);
 
-  // Pull-to-refresh state
+  // Pull-to-refresh
   const [pullDistance, setPullDistance] = useState(0);
   const [refreshing, setRefreshing] = useState(false);
   const touchStartY = useRef(0);
-  const containerRef = useRef<HTMLDivElement>(null);
 
-  // Sticky repo filter — load from localStorage on mount
+  // Collapsed status sections (mobile list view)
+  const [collapsedSections, setCollapsedSections] = useState<Set<string>>(new Set());
+
+  const toggleSection = (key: string) => {
+    setCollapsedSections((prev) => {
+      const next = new Set(prev);
+      next.has(key) ? next.delete(key) : next.add(key);
+      return next;
+    });
+  };
+
+  // Sticky repo filter
   useEffect(() => {
     try {
       const saved = localStorage.getItem('cortex-repo-filter');
       if (saved && ['all', 'kertec-field-app-v2', 'bs-box-web', 'cortex-dev'].includes(saved)) {
         setRepoFilter(saved);
       }
-    } catch {
-      // localStorage unavailable
-    }
+    } catch { /* */ }
   }, []);
 
   const handleRepoChange = (value: string) => {
     setRepoFilter(value);
-    try {
-      localStorage.setItem('cortex-repo-filter', value);
-    } catch {
-      // localStorage unavailable
-    }
+    try { localStorage.setItem('cortex-repo-filter', value); } catch { /* */ }
   };
 
   // Pull-to-refresh handlers
   const handleTouchStart = useCallback((e: React.TouchEvent) => {
-    if (window.scrollY === 0) {
-      touchStartY.current = e.touches[0].clientY;
-    }
+    if (window.scrollY === 0) touchStartY.current = e.touches[0].clientY;
   }, []);
 
   const handleTouchMove = useCallback((e: React.TouchEvent) => {
     if (refreshing || window.scrollY > 0) return;
     const diff = e.touches[0].clientY - touchStartY.current;
-    if (diff > 0) {
-      setPullDistance(Math.min(diff * 0.5, PULL_THRESHOLD + 20));
-    }
+    if (diff > 0) setPullDistance(Math.min(diff * 0.5, PULL_THRESHOLD + 20));
   }, [refreshing]);
 
   const handleTouchEnd = useCallback(async () => {
@@ -76,7 +76,7 @@ export function PipelineBoard({ initialItems }: PipelineBoardProps) {
     setPullDistance(0);
   }, [pullDistance, refreshing, refresh]);
 
-  // Batch progress across ALL items (not just filtered)
+  // Batch progress across ALL items
   const batchProgress = useMemo(() => {
     const progress: Record<string, { total: number; done: number }> = {};
     for (const item of items) {
@@ -104,14 +104,13 @@ export function PipelineBoard({ initialItems }: PipelineBoardProps) {
     });
   }, [items, repoFilter, priorityFilter, myAttention, activeOnly]);
 
-  // Group items by column, then by batch within each column
+  // Column data with batch grouping
   const columnData = useMemo(() => {
     return PIPELINE_COLUMNS.map((col) => {
       const colItems = filteredItems
         .filter((item) => col.statuses.includes(item.status))
         .sort((a, b) => new Date(b.updated_at).getTime() - new Date(a.updated_at).getTime());
 
-      // Separate batched from unbatched
       const batched: Record<string, PipelineItem[]> = {};
       const unbatched: PipelineItem[] = [];
 
@@ -124,12 +123,7 @@ export function PipelineBoard({ initialItems }: PipelineBoardProps) {
         }
       }
 
-      return {
-        ...col,
-        items: colItems,
-        batched,
-        unbatched,
-      };
+      return { ...col, items: colItems, batched, unbatched };
     });
   }, [filteredItems]);
 
@@ -137,7 +131,6 @@ export function PipelineBoard({ initialItems }: PipelineBoardProps) {
 
   return (
     <div
-      ref={containerRef}
       onTouchStart={handleTouchStart}
       onTouchMove={handleTouchMove}
       onTouchEnd={handleTouchEnd}
@@ -148,17 +141,17 @@ export function PipelineBoard({ initialItems }: PipelineBoardProps) {
           className="flex items-center justify-center overflow-hidden transition-[height] duration-200"
           style={{ height: refreshing ? 40 : pullDistance > 0 ? pullDistance : 0 }}
         >
-          <div className={`text-xs text-[var(--muted-foreground)] ${refreshing ? 'animate-pulse' : ''}`}>
+          <span className={`text-xs text-[var(--muted-foreground)] ${refreshing ? 'animate-pulse' : ''}`}>
             {refreshing ? 'Refreshing...' : pullDistance >= PULL_THRESHOLD ? 'Release to refresh' : 'Pull to refresh'}
-          </div>
+          </span>
         </div>
       )}
 
-      {/* Filters */}
-      <div className="mb-4 flex flex-wrap items-center gap-2">
+      {/* Compact filters */}
+      <div className="mb-3 flex items-center gap-1.5 overflow-x-auto pb-1 lg:gap-2 lg:pb-0">
         <button
           onClick={() => setActiveOnly((v) => !v)}
-          className={`rounded-[8px] border px-3 py-1.5 text-sm font-medium transition-colors ${
+          className={`shrink-0 rounded-[8px] border px-2.5 py-1 text-xs font-medium transition-colors lg:px-3 lg:py-1.5 lg:text-sm ${
             activeOnly
               ? 'border-emerald-500 bg-emerald-50 text-emerald-700 dark:border-emerald-600 dark:bg-emerald-950 dark:text-emerald-300'
               : 'border-[var(--border)] bg-[var(--background)] text-[var(--foreground)]'
@@ -170,7 +163,7 @@ export function PipelineBoard({ initialItems }: PipelineBoardProps) {
         <select
           value={repoFilter}
           onChange={(e) => handleRepoChange(e.target.value)}
-          className="rounded-[8px] border border-[var(--border)] bg-[var(--background)] px-3 py-1.5 text-sm"
+          className="shrink-0 rounded-[8px] border border-[var(--border)] bg-[var(--background)] px-2 py-1 text-xs lg:px-3 lg:py-1.5 lg:text-sm"
         >
           <option value="all">All repos</option>
           <option value="kertec-field-app-v2">KerTec</option>
@@ -181,7 +174,7 @@ export function PipelineBoard({ initialItems }: PipelineBoardProps) {
         <select
           value={priorityFilter}
           onChange={(e) => setPriorityFilter(e.target.value)}
-          className="rounded-[8px] border border-[var(--border)] bg-[var(--background)] px-3 py-1.5 text-sm"
+          className="shrink-0 rounded-[8px] border border-[var(--border)] bg-[var(--background)] px-2 py-1 text-xs lg:px-3 lg:py-1.5 lg:text-sm"
         >
           <option value="all">All priorities</option>
           <option value="p0">P0</option>
@@ -191,7 +184,7 @@ export function PipelineBoard({ initialItems }: PipelineBoardProps) {
 
         <button
           onClick={() => setMyAttention((v) => !v)}
-          className={`rounded-[8px] border px-3 py-1.5 text-sm transition-colors ${
+          className={`shrink-0 rounded-[8px] border px-2.5 py-1 text-xs transition-colors lg:px-3 lg:py-1.5 lg:text-sm ${
             myAttention
               ? 'border-[var(--primary)] bg-[var(--primary)] text-white'
               : 'border-[var(--border)] bg-[var(--background)] text-[var(--foreground)]'
@@ -200,79 +193,137 @@ export function PipelineBoard({ initialItems }: PipelineBoardProps) {
           My attention
         </button>
 
-        <span className="ml-auto text-xs text-[var(--muted-foreground)]">
-          {totalCount} item{totalCount !== 1 ? 's' : ''}
+        <span className="ml-auto shrink-0 text-[11px] text-[var(--muted-foreground)] lg:text-xs">
+          {totalCount} items
         </span>
       </div>
 
-      {/* Kanban board — horizontal scroll on mobile, visible columns on desktop */}
-      <div className="overflow-x-auto pb-4">
-        <div className="flex gap-3" style={{ minWidth: `${columnData.filter(c => !c.collapsed || c.items.length > 0).length * 260}px` }}>
-          {columnData.map((col) => {
-            // Hide collapsed columns with no items
-            if (col.collapsed && col.items.length === 0) return null;
+      {/* ─── MOBILE: Vertical list view ─── */}
+      <div className="space-y-2 lg:hidden">
+        {columnData.map((col) => {
+          if (col.collapsed && col.items.length === 0) return null;
+          if (col.items.length === 0) return null;
 
-            const batchIds = Object.keys(col.batched);
+          const isCollapsed = collapsedSections.has(col.key);
+          const batchIds = Object.keys(col.batched);
 
-            return (
-              <div
-                key={col.key}
-                className="w-[250px] shrink-0 rounded-[10px] border border-[var(--border)] bg-[var(--muted)]"
+          return (
+            <div key={col.key} className="rounded-[10px] border border-[var(--border)] bg-[var(--muted)]">
+              {/* Status header — tappable to collapse */}
+              <button
+                onClick={() => toggleSection(col.key)}
+                className="flex w-full items-center justify-between rounded-t-[10px] px-3 py-2"
+                style={{ background: col.bgClass }}
               >
-                {/* Column header */}
-                <div
-                  className="flex items-center justify-between rounded-t-[10px] px-3 py-2"
-                  style={{ background: col.bgClass }}
-                >
+                <div className="flex items-center gap-2">
+                  <svg
+                    className={`h-3.5 w-3.5 transition-transform ${isCollapsed ? '' : 'rotate-90'}`}
+                    style={{ color: col.textClass }}
+                    fill="currentColor"
+                    viewBox="0 0 20 20"
+                  >
+                    <path fillRule="evenodd" d="M7.21 14.77a.75.75 0 01.02-1.06L11.168 10 7.23 6.29a.75.75 0 111.04-1.08l4.5 4.25a.75.75 0 010 1.08l-4.5 4.25a.75.75 0 01-1.06-.02z" clipRule="evenodd" />
+                  </svg>
                   <span
                     className="text-xs font-semibold uppercase tracking-wider"
                     style={{ color: col.textClass }}
                   >
                     {col.label}
                   </span>
-                  <span
-                    className="flex h-5 min-w-5 items-center justify-center rounded-full text-[10px] font-bold"
-                    style={{ background: col.textClass, color: col.bgClass }}
+                </div>
+                <span
+                  className="flex h-5 min-w-5 items-center justify-center rounded-full text-[10px] font-bold"
+                  style={{ background: col.textClass, color: col.bgClass }}
+                >
+                  {col.items.length}
+                </span>
+              </button>
+
+              {/* Items */}
+              {!isCollapsed && (
+                <div className="space-y-1.5 p-1.5">
+                  {batchIds.map((batchId) => (
+                    <BatchGroup
+                      key={batchId}
+                      batchId={batchId}
+                      items={col.batched[batchId]}
+                      progress={batchProgress[batchId]}
+                    />
+                  ))}
+                  {col.unbatched.map((item) => (
+                    <ItemCard key={item.id} item={item} />
+                  ))}
+                </div>
+              )}
+            </div>
+          );
+        })}
+
+        {totalCount === 0 && (
+          <div className="rounded-[10px] border border-[var(--border)] bg-[var(--card)] px-6 py-12 text-center">
+            <p className="text-sm text-[var(--muted-foreground)]">No items match current filters</p>
+          </div>
+        )}
+      </div>
+
+      {/* ─── DESKTOP: Horizontal kanban ─── */}
+      <div className="hidden lg:block">
+        <div className="overflow-x-auto pb-4">
+          <div className="flex gap-3" style={{ minWidth: `${columnData.filter(c => !c.collapsed || c.items.length > 0).length * 260}px` }}>
+            {columnData.map((col) => {
+              if (col.collapsed && col.items.length === 0) return null;
+              const batchIds = Object.keys(col.batched);
+
+              return (
+                <div
+                  key={col.key}
+                  className="w-[250px] shrink-0 rounded-[10px] border border-[var(--border)] bg-[var(--muted)]"
+                >
+                  <div
+                    className="flex items-center justify-between rounded-t-[10px] px-3 py-2"
+                    style={{ background: col.bgClass }}
                   >
-                    {col.items.length}
-                  </span>
-                </div>
+                    <span className="text-xs font-semibold uppercase tracking-wider" style={{ color: col.textClass }}>
+                      {col.label}
+                    </span>
+                    <span
+                      className="flex h-5 min-w-5 items-center justify-center rounded-full text-[10px] font-bold"
+                      style={{ background: col.textClass, color: col.bgClass }}
+                    >
+                      {col.items.length}
+                    </span>
+                  </div>
 
-                {/* Cards */}
-                <div className="space-y-2 p-2" style={{ minHeight: '60px' }}>
-                  {col.items.length === 0 ? (
-                    <div className="py-4 text-center text-xs text-[var(--muted-foreground)]">
-                      Empty
-                    </div>
-                  ) : (
-                    <>
-                      {/* Batch groups first */}
-                      {batchIds.map((batchId) => (
-                        <BatchGroup
-                          key={batchId}
-                          batchId={batchId}
-                          items={col.batched[batchId]}
-                          progress={batchProgress[batchId]}
-                        />
-                      ))}
-
-                      {/* Unbatched items */}
-                      {col.unbatched.map((item) => (
-                        <ItemCard key={item.id} item={item} />
-                      ))}
-                    </>
-                  )}
+                  <div className="space-y-2 p-2" style={{ minHeight: '60px' }}>
+                    {col.items.length === 0 ? (
+                      <div className="py-4 text-center text-xs text-[var(--muted-foreground)]">Empty</div>
+                    ) : (
+                      <>
+                        {batchIds.map((batchId) => (
+                          <BatchGroup
+                            key={batchId}
+                            batchId={batchId}
+                            items={col.batched[batchId]}
+                            progress={batchProgress[batchId]}
+                          />
+                        ))}
+                        {col.unbatched.map((item) => (
+                          <ItemCard key={item.id} item={item} />
+                        ))}
+                      </>
+                    )}
+                  </div>
                 </div>
-              </div>
-            );
-          })}
+              );
+            })}
+          </div>
         </div>
       </div>
     </div>
   );
 }
 
-/* ─── Batch group with collapsible header ─────────────────────────── */
+/* ─── Batch group ─── */
 
 function BatchGroup({
   batchId,
@@ -285,8 +336,6 @@ function BatchGroup({
 }) {
   const [collapsed, setCollapsed] = useState(false);
 
-  // Clean up batch_id for display: replace underscores/hyphens with spaces,
-  // strip trailing timestamps like _20260525 or _2026_05_20
   const displayName = batchId
     .replace(/[-_]\d{8,14}$/g, '')
     .replace(/[-_]\d{4}_\d{2}_\d{2}.*$/g, '')
@@ -300,17 +349,11 @@ function BatchGroup({
         className="flex w-full items-center gap-1.5 px-2.5 py-1.5 text-left"
       >
         <svg
-          className={`h-3 w-3 shrink-0 text-[var(--muted-foreground)] transition-transform ${
-            collapsed ? '' : 'rotate-90'
-          }`}
+          className={`h-3 w-3 shrink-0 text-[var(--muted-foreground)] transition-transform ${collapsed ? '' : 'rotate-90'}`}
           fill="currentColor"
           viewBox="0 0 20 20"
         >
-          <path
-            fillRule="evenodd"
-            d="M7.21 14.77a.75.75 0 01.02-1.06L11.168 10 7.23 6.29a.75.75 0 111.04-1.08l4.5 4.25a.75.75 0 010 1.08l-4.5 4.25a.75.75 0 01-1.06-.02z"
-            clipRule="evenodd"
-          />
+          <path fillRule="evenodd" d="M7.21 14.77a.75.75 0 01.02-1.06L11.168 10 7.23 6.29a.75.75 0 111.04-1.08l4.5 4.25a.75.75 0 010 1.08l-4.5 4.25a.75.75 0 01-1.06-.02z" clipRule="evenodd" />
         </svg>
         <span className="min-w-0 flex-1 truncate text-[10px] font-semibold text-[var(--muted-foreground)]">
           {displayName}
