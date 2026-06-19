@@ -215,10 +215,10 @@ export function PipelineBoard({ initialItems }: PipelineBoardProps) {
     return items.filter((i) => {
       if (repoFilter !== 'all' && i.repo !== repoFilter) return false;
       if (personFilter === 'scott') {
-        return SCOTT_ACTS_ON.has(i.status) || SHARED_STATUSES.has(i.status);
+        return BRIAN_ACTS_ON.has(i.status) || SHARED_STATUSES.has(i.status);
       }
       if (personFilter === 'brian') {
-        return BRIAN_ACTS_ON.has(i.status) || SHARED_STATUSES.has(i.status);
+        return SCOTT_ACTS_ON.has(i.status) || SHARED_STATUSES.has(i.status);
       }
       return true;
     });
