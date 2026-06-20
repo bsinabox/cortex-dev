@@ -1,633 +1,466 @@
 'use client';
 
-import { useState, useMemo, useEffect, useRef, useCallback, useTransition } from 'react';
+import { useState, useMemo, useCallback, useRef } from 'react';
 import Link from 'next/link';
 import { useRealtimeTable } from '@/hooks/useRealtimeTable';
 import { type PipelineItem } from '@/components/ItemCard';
 import {
-  PRIORITY_CONFIG, REPO_CONFIG, PIPELINE_PHASES, getPhaseIndex, getPhaseForStatus,
+  PIPELINE_PHASES, getPhaseIndex, getPhaseForStatus, getPhasesForPolicy,
   QUEUE_STATUSES, BLOCKED_STATUSES, DONE_STATUSES, waitTime,
 } from '@/lib/constants';
-import { approveItem } from './actions';
 
-/* ─── Person filter logic ─── */
+/* ─── Types ─── */
 
-const SCOTT_ACTS_ON = new Set([
-  'testing_in_dev', 'awaiting_hub_design', 'intake', 'designing',
-  'cross_review', 'design_conflict', 'blocked', 'readiness_blocked',
-  'waiting_on_dependency', 'decomposed',
-]);
-const BRIAN_ACTS_ON = new Set([
-  'human_review', 'design_review_hold', 'promotion_review',
-]);
+type BuildComponent = {
+  id: string;
+  component_code: string;
+  name: string;
+  description: string | null;
+  status: string;
+  owner: string;
+};
 
-function isActionFor(status: string, person: 'scott' | 'brian' | 'all'): boolean {
-  if (person === 'all') return SCOTT_ACTS_ON.has(status) || BRIAN_ACTS_ON.has(status);
-  if (person === 'scott') return SCOTT_ACTS_ON.has(status);
-  return BRIAN_ACTS_ON.has(status);
+type BuildPlan = {
+  component: BuildComponent;
+  items: PipelineItem[];
+};
+
+/* ─── Helpers ─── */
+
+const SCOTT_ACTS = new Set(['testing_in_dev', 'awaiting_hub_design', 'intake', 'designing', 'cross_review', 'design_conflict']);
+const BRIAN_ACTS = new Set(['human_review', 'design_review_hold', 'promotion_review']);
+
+function isAction(status: string, person: string): boolean {
+  return person === 'scott' ? SCOTT_ACTS.has(status) : BRIAN_ACTS.has(status);
 }
 
-function isWaitingOnOther(status: string, person: 'scott' | 'brian' | 'all'): boolean {
-  if (person === 'all') return false;
-  if (person === 'scott') return BRIAN_ACTS_ON.has(status);
-  return SCOTT_ACTS_ON.has(status);
+function calcPlan(items: PipelineItem[], person: string) {
+  const t = items.length;
+  const bld = items.filter(i => ['approved', 'executing'].includes(i.status)).length;
+  const qa = items.filter(i => ['qa', 'testing_in_dev'].includes(i.status)).length;
+  const rev = items.filter(i => ['human_review', 'design_review_hold', 'cross_review'].includes(i.status)).length;
+  const des = items.filter(i => ['designing', 'design_conflict'].includes(i.status)).length;
+  const blk = items.filter(i => BLOCKED_STATUSES.includes(i.status)).length;
+  const done = items.filter(i => DONE_STATUSES.includes(i.status)).length;
+  const acts = items.filter(i => isAction(i.status, person)).length;
+  const through = bld + qa + done;
+  const pct = t > 0 ? Math.round((through / t) * 100) : 0;
+  const minHours = items.length > 0
+    ? Math.min(...items.map(i => (Date.now() - new Date(i.updated_at).getTime()) / 3600000))
+    : 999;
+  return { t, bld, qa, rev, des, blk, done, acts, through, pct, minHours };
 }
 
-/* ─── Sort helpers ─── */
-
-function sortGroup(a: PipelineItem, b: PipelineItem): number {
-  // By phase index (furthest along first for action visibility)
-  const phaseA = getPhaseIndex(a.status);
-  const phaseB = getPhaseIndex(b.status);
-  if (phaseA !== phaseB) return phaseB - phaseA;
-  // Then priority
-  const pOrder = ['p0', 'p1', 'p2', 'p3'];
-  const pDiff = pOrder.indexOf(a.priority) - pOrder.indexOf(b.priority);
-  if (pDiff !== 0) return pDiff;
-  // Then recency
-  return new Date(b.updated_at).getTime() - new Date(a.updated_at).getTime();
+function actionLabel(status: string): { text: string; bg: string } | null {
+  if (status === 'testing_in_dev') return { text: 'Test', bg: '#0f766e' };
+  if (status === 'human_review' || status === 'design_review_hold') return { text: 'Ship', bg: '#059669' };
+  if (status === 'promotion_review') return { text: 'Promote', bg: '#7c3aed' };
+  return null;
 }
 
-/* ─── Action label for inline display ─── */
-
-function getActionLabel(status: string): { text: string; color: string } | null {
-  switch (status) {
-    case 'human_review':       return { text: 'Ship', color: '#059669' };
-    case 'design_review_hold': return { text: 'Ship', color: '#059669' };
-    case 'testing_in_dev':     return { text: 'Test', color: '#0F766E' };
-    case 'promotion_review':   return { text: 'Promote', color: '#7C3AED' };
-    default: return null;
-  }
-}
-
-/* ─── Status description ─── */
-
-function getStatusHint(status: string): string {
-  switch (status) {
-    case 'human_review': return 'Approve or request changes';
-    case 'testing_in_dev': return 'Verify on dev, then promote';
-    case 'design_review_hold': return 'Review QA findings';
-    case 'promotion_review': return 'Approve for production';
-    case 'approved': return 'Worker assigned';
-    case 'executing': return 'Building...';
-    case 'qa': return 'Running QA';
-    case 'designing': return 'Design in progress';
-    case 'cross_review': return 'Codex reviewing';
-    case 'design_conflict': return 'Needs resolution';
-    case 'intake': return 'Needs design session';
-    case 'awaiting_hub_design': return 'Start Hub chat';
-    case 'promoting': return 'Deploying to prod';
-    case 'waiting_migration': return 'Migrations running';
-    case 'waiting_prod_evidence': return 'Collecting evidence';
-    case 'blocked': return 'Manual intervention';
-    case 'readiness_blocked': return 'Prerequisites missing';
-    case 'waiting_on_dependency': return 'Blocked by dep';
-    case 'decomposed': return 'Split into subtasks';
-    case 'done': return 'Complete';
-    case 'subtasks_complete': return 'Subtasks done';
-    default: return status;
-  }
+function statusHint(status: string): string {
+  const hints: Record<string, string> = {
+    human_review: 'Approve or request changes', testing_in_dev: 'Verify on dev then promote',
+    design_review_hold: 'Review QA findings', approved: 'Queued for worker',
+    executing: 'Building...', qa: 'Running QA', cross_review: 'Codex reviewing',
+    designing: 'Design in progress', readiness_blocked: 'Waiting on dependencies',
+    blocked: 'Needs intervention', awaiting_hub_design: 'Needs design session',
+  };
+  return hints[status] ?? status;
 }
 
 /* ─── Component ─── */
 
 interface PipelineBoardProps {
-  initialItems: PipelineItem[];
+  plans: BuildPlan[];
+  singles: PipelineItem[];
 }
 
 const PULL_THRESHOLD = 80;
 
-export function PipelineBoard({ initialItems }: PipelineBoardProps) {
-  const { data: items, refresh } = useRealtimeTable<PipelineItem>(
-    'agentic_items',
-    initialItems
-  );
+export function PipelineBoard({ plans: initialPlans, singles: initialSingles }: PipelineBoardProps) {
+  const { data: allItems, refresh } = useRealtimeTable<PipelineItem>('agentic_items', [
+    ...initialPlans.flatMap(p => p.items),
+    ...initialSingles,
+  ]);
 
-  const [repoFilter, setRepoFilter] = useState<string>('all');
-  const [personFilter, setPersonFilter] = useState<'scott' | 'brian' | 'all'>('scott');
-  const [showDone, setShowDone] = useState(false);
+  const [person, setPerson] = useState<'scott' | 'brian'>('scott');
+  const [drillId, setDrillId] = useState<string | null>(null);
 
   // Pull-to-refresh
-  const [pullDistance, setPullDistance] = useState(0);
+  const [pullDist, setPullDist] = useState(0);
   const [refreshing, setRefreshing] = useState(false);
-  const touchStartY = useRef(0);
+  const touchY = useRef(0);
+  const onTS = useCallback((e: React.TouchEvent) => { if (window.scrollY === 0) touchY.current = e.touches[0].clientY; }, []);
+  const onTM = useCallback((e: React.TouchEvent) => { if (refreshing || window.scrollY > 0) return; const d = e.touches[0].clientY - touchY.current; if (d > 0) setPullDist(Math.min(d * 0.5, PULL_THRESHOLD + 20)); }, [refreshing]);
+  const onTE = useCallback(async () => { if (pullDist >= PULL_THRESHOLD && !refreshing) { setRefreshing(true); setPullDist(PULL_THRESHOLD); await refresh(); setRefreshing(false); } setPullDist(0); }, [pullDist, refreshing, refresh]);
 
-  // Sticky repo filter
-  useEffect(() => {
-    try {
-      const saved = localStorage.getItem('cortex-repo-filter');
-      if (saved && ['all', 'kertec-field-app-v2', 'bs-box-web', 'cortex-dev'].includes(saved)) {
-        setRepoFilter(saved);
-      }
-    } catch { /* */ }
-  }, []);
+  // Regroup items by component using live data
+  const { livePlans, liveSingles } = useMemo(() => {
+    const compMap = new Map<string, BuildComponent>();
+    for (const p of initialPlans) compMap.set(p.component.id, p.component);
 
-  const handleRepoChange = (value: string) => {
-    setRepoFilter(value);
-    try { localStorage.setItem('cortex-repo-filter', value); } catch { /* */ }
-  };
+    const planItems = new Map<string, PipelineItem[]>();
+    const sng: PipelineItem[] = [];
 
-  // Pull-to-refresh handlers
-  const handleTouchStart = useCallback((e: React.TouchEvent) => {
-    if (window.scrollY === 0) touchStartY.current = e.touches[0].clientY;
-  }, []);
-  const handleTouchMove = useCallback((e: React.TouchEvent) => {
-    if (refreshing || window.scrollY > 0) return;
-    const diff = e.touches[0].clientY - touchStartY.current;
-    if (diff > 0) setPullDistance(Math.min(diff * 0.5, PULL_THRESHOLD + 20));
-  }, [refreshing]);
-  const handleTouchEnd = useCallback(async () => {
-    if (pullDistance >= PULL_THRESHOLD && !refreshing) {
-      setRefreshing(true);
-      setPullDistance(PULL_THRESHOLD);
-      await refresh();
-      setRefreshing(false);
-    }
-    setPullDistance(0);
-  }, [pullDistance, refreshing, refresh]);
-
-  // Filter by repo
-  const filtered = useMemo(() => {
-    let list = items.filter(i => !['cancelled', 'failed'].includes(i.status));
-    if (repoFilter !== 'all') list = list.filter(i => i.repo === repoFilter);
-    return list;
-  }, [items, repoFilter]);
-
-  // Phase counts for summary bar
-  const phaseCounts = useMemo(() => {
-    const counts: Record<string, number> = {};
-    for (const p of PIPELINE_PHASES) counts[p.key] = 0;
-    counts['queue'] = 0;
-    counts['blocked'] = 0;
-    counts['done'] = 0;
-    for (const item of filtered) {
-      if (QUEUE_STATUSES.includes(item.status)) { counts['queue']++; continue; }
-      if (BLOCKED_STATUSES.includes(item.status)) { counts['blocked']++; continue; }
-      if (DONE_STATUSES.includes(item.status)) { counts['done']++; continue; }
-      const phase = getPhaseForStatus(item.status);
-      if (phase) counts[phase.key]++;
-    }
-    return counts;
-  }, [filtered]);
-
-  // Sort into groups
-  const { actionItems, waitingItems, autonomousItems, blockedItems, queueItems, doneItems } = useMemo(() => {
-    const action: PipelineItem[] = [];
-    const waiting: PipelineItem[] = [];
-    const autonomous: PipelineItem[] = [];
-    const blocked: PipelineItem[] = [];
-    const queue: PipelineItem[] = [];
-    const done: PipelineItem[] = [];
-
-    for (const item of filtered) {
-      if (DONE_STATUSES.includes(item.status)) { done.push(item); continue; }
-      if (QUEUE_STATUSES.includes(item.status)) { queue.push(item); continue; }
-      if (BLOCKED_STATUSES.includes(item.status)) { blocked.push(item); continue; }
-
-      if (isActionFor(item.status, personFilter)) {
-        action.push(item);
-      } else if (isWaitingOnOther(item.status, personFilter)) {
-        waiting.push(item);
+    for (const item of allItems) {
+      if (item.component_id && compMap.has(item.component_id)) {
+        const list = planItems.get(item.component_id) ?? [];
+        list.push(item);
+        planItems.set(item.component_id, list);
       } else {
-        autonomous.push(item);
+        sng.push(item);
       }
     }
 
-    action.sort(sortGroup);
-    waiting.sort(sortGroup);
-    autonomous.sort(sortGroup);
-    blocked.sort(sortGroup);
-    queue.sort((a, b) => {
-      const pOrder = ['p0', 'p1', 'p2', 'p3'];
-      const pDiff = pOrder.indexOf(a.priority) - pOrder.indexOf(b.priority);
-      if (pDiff !== 0) return pDiff;
-      return new Date(b.updated_at).getTime() - new Date(a.updated_at).getTime();
-    });
-    done.sort((a, b) => new Date(b.updated_at).getTime() - new Date(a.updated_at).getTime());
+    const lp: BuildPlan[] = [];
+    for (const [cid, items] of planItems) {
+      const comp = compMap.get(cid);
+      if (comp) lp.push({ component: comp, items });
+    }
+    lp.sort((a, b) => b.items.length - a.items.length);
+    return { livePlans: lp, liveSingles: sng };
+  }, [allItems, initialPlans]);
 
-    return { actionItems: action, waitingItems: waiting, autonomousItems: autonomous, blockedItems: blocked, queueItems: queue, doneItems: done };
-  }, [filtered, personFilter]);
+  // Filter by person
+  const personPlans = livePlans.filter(p => p.component.owner === person);
+  const personSingles = liveSingles.filter(i => {
+    if (['cancelled', 'failed'].includes(i.status)) return false;
+    return isAction(i.status, person) ||
+      (!SCOTT_ACTS.has(i.status) && !BRIAN_ACTS.has(i.status) && person === 'scott');
+  });
 
-  const totalActive = filtered.length - doneItems.length;
+  // Drill target
+  const drillPlan = drillId ? personPlans.find(p => p.component.id === drillId) ?? null : null;
+
+  // Activity counts across all person plans
+  const allPersonItems = [...personPlans.flatMap(p => p.items), ...personSingles];
+  const bldCount = allPersonItems.filter(i => ['approved', 'executing'].includes(i.status)).length;
+  const qaCount = allPersonItems.filter(i => i.status === 'qa').length;
+  const actCount = allPersonItems.filter(i => isAction(i.status, person)).length;
 
   return (
-    <div
-      onTouchStart={handleTouchStart}
-      onTouchMove={handleTouchMove}
-      onTouchEnd={handleTouchEnd}
-    >
+    <div onTouchStart={onTS} onTouchMove={onTM} onTouchEnd={onTE}>
       {/* Pull-to-refresh */}
-      {(pullDistance > 0 || refreshing) && (
+      {(pullDist > 0 || refreshing) && (
         <div className="flex items-center justify-center overflow-hidden transition-[height] duration-200"
-          style={{ height: refreshing ? 40 : pullDistance > 0 ? pullDistance : 0 }}>
+          style={{ height: refreshing ? 40 : pullDist > 0 ? pullDist : 0 }}>
           <span className={`text-xs text-[var(--muted-foreground)] ${refreshing ? 'animate-pulse' : ''}`}>
-            {refreshing ? 'Refreshing...' : pullDistance >= PULL_THRESHOLD ? 'Release to refresh' : 'Pull to refresh'}
+            {refreshing ? 'Refreshing...' : pullDist >= PULL_THRESHOLD ? 'Release to refresh' : 'Pull to refresh'}
           </span>
         </div>
       )}
 
-      {/* Filter bar */}
-      <div className="mb-2 flex items-center gap-1.5">
-        <div className="flex rounded-[8px] border border-[var(--border)] overflow-hidden">
-          {(['scott', 'brian', 'all'] as const).map((p) => (
-            <button key={p} onClick={() => setPersonFilter(p)}
-              className={`px-2.5 py-1 text-[11px] font-medium capitalize transition-colors ${
-                personFilter === p
-                  ? 'bg-[var(--primary)] text-white'
-                  : 'bg-[var(--background)] text-[var(--muted-foreground)]'
+      {/* Header */}
+      <div className="mb-2 flex items-center gap-2">
+        <h1 className="flex-1 text-xl font-semibold tracking-tight lg:text-2xl">Pipeline</h1>
+        <div className="flex overflow-hidden rounded-[8px] border border-[var(--border)]">
+          {(['scott', 'brian'] as const).map(p => (
+            <button key={p} onClick={() => { setPerson(p); setDrillId(null); }}
+              className={`px-3 py-1.5 text-[11px] font-semibold transition-colors ${
+                person === p ? 'bg-[var(--primary)] text-white' : 'bg-[var(--background)] text-[var(--muted-foreground)]'
               }`}>
-              {p === 'all' ? 'All' : p === 'scott' ? 'Mine' : 'Brian'}
+              {p === 'scott' ? 'Mine' : 'Brian'}
             </button>
           ))}
         </div>
-
-        <select
-          value={repoFilter}
-          onChange={(e) => handleRepoChange(e.target.value)}
-          className="rounded-[8px] border border-[var(--border)] bg-[var(--background)] px-2 py-1 text-xs"
-        >
-          <option value="all">All repos</option>
-          <option value="kertec-field-app-v2">KerTec</option>
-          <option value="bs-box-web">BS Box</option>
-          <option value="cortex-dev">Cortex</option>
-        </select>
-
-        <span className="ml-auto text-[11px] text-[var(--muted-foreground)]">
-          {actionItems.length > 0 && (
-            <span className="mr-1.5 font-semibold text-red-500">{actionItems.length} action</span>
-          )}
-          {totalActive} active
-        </span>
       </div>
 
-      {/* Phase summary bar */}
-      <div className="mb-3 flex flex-wrap gap-x-2 gap-y-1 rounded-[8px] border border-[var(--border)] bg-[var(--card)] px-2.5 py-1.5">
-        {PIPELINE_PHASES.map((phase) => (
-          <span key={phase.key} className="flex items-center gap-1 text-[10px]">
-            <span className="inline-block h-2 w-2 rounded-full" style={{ background: phase.dot }} />
-            <span style={{ color: phase.text }} className="font-medium">{phase.short}</span>
-            <span className="text-[var(--muted-foreground)]">{phaseCounts[phase.key] || 0}</span>
-          </span>
-        ))}
-        <span className="flex items-center gap-1 text-[10px]">
-          <span className="inline-block h-2 w-2 rounded-full bg-[var(--muted-foreground)]" style={{ opacity: 0.4 }} />
-          <span className="text-[var(--muted-foreground)]">Q {phaseCounts['queue'] || 0}</span>
-        </span>
-        {(phaseCounts['blocked'] || 0) > 0 && (
-          <span className="flex items-center gap-1 text-[10px]">
-            <span className="inline-block h-2 w-2 rounded-full" style={{ background: '#EF4444' }} />
-            <span className="text-red-500">Blk {phaseCounts['blocked']}</span>
-          </span>
-        )}
-      </div>
-
-      {/* Pipeline Activity bar — always visible */}
-      <PipelineActivityBar
-        items={filtered}
-        actionCount={actionItems.length}
-        personFilter={personFilter}
-      />
-
-      {/* ─── Status Board rows ─── */}
-      <div className="space-y-0.5">
-
-        {/* ACTION NEEDED */}
-        {actionItems.length > 0 && (
-          <>
-            <SectionLabel label="Action needed" count={actionItems.length} accent="#991B1B" />
-            {actionItems.map((item) => (
-              <BoardRow key={item.id} item={item} isAction />
-            ))}
-          </>
-        )}
-
-        {/* WAITING ON OTHER */}
-        {waitingItems.length > 0 && (
-          <>
-            <SectionLabel
-              label={personFilter === 'scott' ? 'Waiting on Brian' : personFilter === 'brian' ? 'Waiting on Scott' : ''}
-              count={waitingItems.length}
-              accent="#92400E"
-            />
-            {waitingItems.map((item) => (
-              <BoardRow key={item.id} item={item} />
-            ))}
-          </>
-        )}
-
-        {/* AUTONOMOUS */}
-        {autonomousItems.length > 0 && (
-          <>
-            <SectionLabel label="Autonomous" count={autonomousItems.length} accent="#1E40AF" />
-            {autonomousItems.map((item) => (
-              <BoardRow key={item.id} item={item} showRound />
-            ))}
-          </>
-        )}
-
-        {/* BLOCKED */}
-        {blockedItems.length > 0 && (
-          <>
-            <SectionLabel label="Blocked" count={blockedItems.length} accent="#DC2626" />
-            {blockedItems.map((item) => (
-              <BoardRow key={item.id} item={item} />
-            ))}
-          </>
-        )}
-
-        {/* QUEUE */}
-        {queueItems.length > 0 && (
-          <>
-            <SectionLabel label="Queue" count={queueItems.length} accent="var(--muted-foreground)" />
-            {queueItems.map((item) => (
-              <BoardRow key={item.id} item={item} dimmed />
-            ))}
-          </>
-        )}
-
-        {/* DONE */}
-        {doneItems.length > 0 && (
-          <button onClick={() => setShowDone(!showDone)}
-            className="mt-1 flex w-full items-center gap-1.5 rounded-[6px] px-2 py-1 text-[10px] text-[var(--muted-foreground)] hover:bg-[var(--muted)]">
-            <svg className={`h-2.5 w-2.5 transition-transform ${showDone ? 'rotate-90' : ''}`}
-              fill="currentColor" viewBox="0 0 20 20">
-              <path fillRule="evenodd" d="M7.21 14.77a.75.75 0 01.02-1.06L11.168 10 7.23 6.29a.75.75 0 111.04-1.08l4.5 4.25a.75.75 0 010 1.08l-4.5 4.25a.75.75 0 01-1.06-.02z" clipRule="evenodd" />
-            </svg>
-            Done ({doneItems.length})
-          </button>
-        )}
-        {showDone && doneItems.map((item) => (
-          <BoardRow key={item.id} item={item} dimmed />
-        ))}
-
-        {filtered.length === 0 && (
-          <div className="rounded-[10px] border border-[var(--border)] bg-[var(--card)] px-6 py-12 text-center">
-            <p className="text-sm text-[var(--muted-foreground)]">No items match current filter</p>
-          </div>
-        )}
-      </div>
-    </div>
-  );
-}
-
-/* ─── Lightweight section divider ─── */
-
-function SectionLabel({ label, count, accent }: { label: string; count: number; accent: string }) {
-  if (!label) return null;
-  return (
-    <div className="flex items-center gap-1.5 px-1 pb-0.5 pt-2 first:pt-0">
-      <span className="text-[10px] font-semibold uppercase tracking-wider" style={{ color: accent }}>
-        {label}
-      </span>
-      <span className="flex h-4 min-w-4 items-center justify-center rounded-full text-[9px] font-bold text-white"
-        style={{ background: accent }}>
-        {count}
-      </span>
-    </div>
-  );
-}
-
-/* ─── Pipeline Activity bar — always visible ─── */
-
-function PipelineActivityBar({ items, actionCount, personFilter }: {
-  items: PipelineItem[];
-  actionCount: number;
-  personFilter: 'scott' | 'brian' | 'all';
-}) {
-  const buildingItems = items.filter(i => i.status === 'executing');
-  const queuedItems = items.filter(i => i.status === 'approved');
-  const qaItems = items.filter(i => i.status === 'qa');
-  const inFlight = buildingItems.length + queuedItems.length + qaItems.length;
-
-  // Round distribution for autonomous items
-  const autoItems = [...buildingItems, ...queuedItems, ...qaItems];
-  const rounds: Record<number, number> = {};
-  for (const item of autoItems) {
-    const r = item.current_round ?? 0;
-    rounds[r] = (rounds[r] || 0) + 1;
-  }
-  const roundKeys = Object.keys(rounds).map(Number).sort((a, b) => a - b);
-
-  const isActive = inFlight > 0;
-  const waitLabel = personFilter === 'scott' ? 'waiting on you'
-    : personFilter === 'brian' ? 'waiting on Brian' : 'need action';
-
-  return (
-    <div className={`mb-3 rounded-[8px] border px-2.5 py-1.5 text-[10px] ${
-      isActive
-        ? 'border-blue-200 bg-blue-50 dark:border-blue-800 dark:bg-blue-950/30'
-        : 'border-[var(--border)] bg-[var(--card)]'
-    }`}>
-      <div className="flex items-center gap-2">
-        {/* Activity indicator */}
+      {/* Activity bar */}
+      <div className={`mb-3 flex items-center gap-2 rounded-[8px] border px-2.5 py-1.5 text-[10px] ${
+        bldCount + qaCount > 0
+          ? 'border-blue-200 bg-blue-50 dark:border-blue-800 dark:bg-blue-950/30'
+          : 'border-[var(--border)] bg-[var(--card)]'
+      }`}>
         <span className={`inline-block h-2 w-2 shrink-0 rounded-full ${
-          isActive
-            ? 'bg-emerald-400 animate-pulse'
-            : 'bg-[var(--muted-foreground)] opacity-40'
+          bldCount + qaCount > 0 ? 'bg-emerald-400 animate-pulse' : 'bg-[var(--muted-foreground)] opacity-40'
         }`} />
+        {bldCount + qaCount > 0 ? (
+          <div className="flex flex-wrap items-center gap-x-2">
+            {bldCount > 0 && <span className="font-semibold text-emerald-700 dark:text-emerald-300">{bldCount} building</span>}
+            {qaCount > 0 && <span className="font-semibold text-teal-700 dark:text-teal-300">{qaCount} QA</span>}
+          </div>
+        ) : (
+          <span className="text-[var(--muted-foreground)]">Pipeline idle</span>
+        )}
+        {actCount > 0 && (
+          <span className="ml-auto shrink-0 font-semibold text-red-500">
+            {actCount} waiting on {person === 'scott' ? 'you' : 'Brian'}
+          </span>
+        )}
+      </div>
 
-        {/* Status text */}
-        <div className="flex flex-wrap items-center gap-x-2 gap-y-0.5 min-w-0 flex-1">
-          {isActive ? (
+      {/* ─── GRID VIEW ─── */}
+      {!drillPlan && (
+        <div>
+          {/* Build plan cards */}
+          {personPlans.map(plan => (
+            <PlanCard key={plan.component.id} plan={plan} person={person} onDrill={() => setDrillId(plan.component.id)} />
+          ))}
+
+          {personPlans.length === 0 && (
+            <div className="rounded-[10px] border border-dashed border-[var(--border)] p-8 text-center">
+              <p className="text-sm text-[var(--muted-foreground)]">No active build plans for {person === 'scott' ? 'you' : 'Brian'}</p>
+            </div>
+          )}
+
+          {/* Individual items */}
+          {personSingles.length > 0 && (
             <>
-              {buildingItems.length > 0 && (
-                <span className="font-semibold text-emerald-700 dark:text-emerald-300">{buildingItems.length} building</span>
-              )}
-              {qaItems.length > 0 && (
-                <span className="font-semibold text-teal-700 dark:text-teal-300">{qaItems.length} QA</span>
-              )}
-              {queuedItems.length > 0 && (
-                <span className="text-blue-600 dark:text-blue-300">{queuedItems.length} queued</span>
-              )}
-              {roundKeys.length > 0 && (
-                <span className="flex items-center gap-1">
-                  {roundKeys.map(r => (
-                    <span key={r} className={`rounded-[3px] px-1 py-0.5 text-[9px] ${
-                      r >= 3 ? 'bg-red-100 text-red-600 dark:bg-red-900 dark:text-red-300'
-                        : r >= 2 ? 'bg-amber-100 text-amber-600 dark:bg-amber-900 dark:text-amber-300'
-                        : 'bg-[var(--muted)] text-[var(--muted-foreground)]'
-                    }`}>
-                      R{r}:{rounds[r]}
-                    </span>
-                  ))}
-                </span>
-              )}
+              <div className="px-1 pb-1 pt-3 text-[9px] font-bold uppercase tracking-widest text-[var(--muted-foreground)]">
+                Individual Items ({personSingles.length})
+              </div>
+              {personSingles.map(item => (
+                <SingleRow key={item.id} item={item} person={person} />
+              ))}
             </>
-          ) : (
-            <span className="text-[var(--muted-foreground)]">Pipeline idle</span>
           )}
         </div>
+      )}
 
-        {/* Action count on the right */}
-        {actionCount > 0 && (
-          <span className="shrink-0 font-semibold text-red-500">
-            {actionCount} {waitLabel}
-          </span>
-        )}
+      {/* ─── DRILL VIEW ─── */}
+      {drillPlan && (
+        <DrillView plan={drillPlan} person={person} onBack={() => setDrillId(null)} />
+      )}
+    </div>
+  );
+}
+
+/* ─── Build Plan Card (Mission Control style) ─── */
+
+function PlanCard({ plan, person, onDrill }: { plan: BuildPlan; person: string; onDrill: () => void }) {
+  const s = calcPlan(plan.items, person);
+  const idle = s.pct === 0 && s.bld === 0 && s.qa === 0 && s.rev === 0 && s.des === 0;
+
+  const pills: { label: string; color: string }[] = [];
+  if (s.des > 0) pills.push({ label: `Design ${s.des}`, color: '#8b5cf6' });
+  if (s.rev > 0) pills.push({ label: `Review ${s.rev}`, color: '#f59e0b' });
+  if (s.bld > 0) pills.push({ label: `Building ${s.bld}`, color: '#3b82f6' });
+  if (s.qa > 0) pills.push({ label: `Testing ${s.qa}`, color: '#14b8a6' });
+  if (s.done > 0) pills.push({ label: `Complete ${s.done}`, color: '#10b981' });
+  if (s.blk > 0) pills.push({ label: `Blocked ${s.blk}`, color: '#ef4444' });
+
+  const barPct = s.pct;
+  const barColors: string[] = [];
+  if (s.des > 0) barColors.push('#8b5cf6');
+  if (s.rev > 0) barColors.push('#f59e0b');
+  if (s.bld > 0) barColors.push('#3b82f6');
+  if (s.qa > 0) barColors.push('#14b8a6');
+  if (s.done > 0) barColors.push('#10b981');
+
+  const barBg = barColors.length > 1
+    ? `linear-gradient(90deg, ${barColors.join(', ')})`
+    : barColors[0] ?? 'var(--muted)';
+
+  return (
+    <div
+      onClick={onDrill}
+      className={`mb-2 cursor-pointer rounded-[12px] border border-[var(--border)] bg-[var(--card)] p-4 transition-colors active:border-[var(--primary)] ${idle ? 'opacity-40' : ''}`}
+    >
+      <div className="text-[9px] font-bold uppercase tracking-[1.2px] text-[var(--muted-foreground)]">Build Progress</div>
+
+      <div className="mt-1 flex items-start justify-between">
+        <div className="min-w-0 flex-1 pr-3">
+          <div className="text-[15px] font-bold leading-snug">{plan.component.name}</div>
+        </div>
+        <div className="text-right">
+          <div className="text-[30px] font-extrabold leading-none text-[var(--primary)]">{s.pct}%</div>
+          <div className="mt-0.5 text-[10px] text-[var(--muted-foreground)]">{s.t} items</div>
+        </div>
       </div>
 
-      {/* Item SID links — tap to jump to detail */}
-      {isActive && (
-        <div className="mt-1 flex flex-wrap gap-x-1.5 gap-y-1 pl-4">
-          {buildingItems.map(item => (
-            <Link key={item.id} href={`/pipeline/${item.id}`}
-              className="inline-flex items-center gap-1 rounded-[4px] border border-emerald-300 bg-emerald-100 px-1.5 py-0.5 text-[9px] font-mono font-bold text-emerald-800 active:opacity-70 dark:border-emerald-700 dark:bg-emerald-900 dark:text-emerald-200">
-              <span className="inline-block h-1.5 w-1.5 rounded-full bg-emerald-500 animate-pulse" />
-              {item.id.substring(0, 8).toUpperCase()}
-            </Link>
-          ))}
-          {qaItems.map(item => (
-            <Link key={item.id} href={`/pipeline/${item.id}`}
-              className="inline-flex items-center gap-1 rounded-[4px] border border-teal-300 bg-teal-100 px-1.5 py-0.5 text-[9px] font-mono font-bold text-teal-800 active:opacity-70 dark:border-teal-700 dark:bg-teal-900 dark:text-teal-200">
-              {item.id.substring(0, 8).toUpperCase()}
-            </Link>
-          ))}
-          {queuedItems.length <= 4 && queuedItems.map(item => (
-            <Link key={item.id} href={`/pipeline/${item.id}`}
-              className="inline-flex rounded-[4px] border border-blue-200 bg-blue-100 px-1.5 py-0.5 text-[9px] font-mono font-bold text-blue-700 active:opacity-70 dark:border-blue-700 dark:bg-blue-900 dark:text-blue-200">
-              {item.id.substring(0, 8).toUpperCase()}
-            </Link>
-          ))}
-          {queuedItems.length > 4 && (
-            <span className="rounded-[4px] bg-blue-100 px-1.5 py-0.5 text-[9px] text-blue-600 dark:bg-blue-900 dark:text-blue-300">
-              +{queuedItems.length} queued
-            </span>
-          )}
+      {plan.component.description && (
+        <p className="mt-1 line-clamp-2 text-[10px] leading-relaxed text-[var(--muted-foreground)]">
+          {plan.component.description}
+        </p>
+      )}
+
+      <div className="mt-2 h-[5px] overflow-hidden rounded-full bg-[var(--muted)]">
+        <div className="h-full rounded-full" style={{ width: `${barPct}%`, background: barBg }} />
+      </div>
+
+      <div className="mt-2 flex flex-wrap gap-1">
+        {pills.map(p => (
+          <span key={p.label} className="inline-flex items-center gap-1 rounded-[5px] bg-[var(--muted)] px-2 py-0.5 text-[10px] font-semibold">
+            <span className="inline-block h-1.5 w-1.5 rounded-full" style={{ background: p.color }} />
+            {p.label}
+          </span>
+        ))}
+      </div>
+
+      <div className="mt-1.5 text-[10px] text-[var(--muted-foreground)]">
+        Last activity: {waitTime(new Date(Date.now() - s.minHours * 3600000).toISOString())} ago
+      </div>
+
+      {s.acts > 0 && (
+        <div className="mt-1.5 flex items-center gap-2 rounded-[6px] border border-red-200 bg-red-50 px-2 py-1.5 dark:border-red-900 dark:bg-red-950/30">
+          <span className="text-[14px] font-extrabold text-red-500">{s.acts}</span>
+          <span className="text-[10px] text-red-400">
+            item{s.acts > 1 ? 's' : ''} waiting on {person === 'scott' ? 'you' : 'Brian'}
+          </span>
         </div>
       )}
     </div>
   );
 }
 
-/* ─── Dense board row — 2 lines per item ─── */
+/* ─── Single item row ─── */
 
-function BoardRow({ item, isAction, dimmed, showRound }: { item: PipelineItem; isAction?: boolean; dimmed?: boolean; showRound?: boolean }) {
+function SingleRow({ item, person }: { item: PipelineItem; person: string }) {
+  const act = isAction(item.status, person);
   const sid = item.id.substring(0, 8).toUpperCase();
-  const priority = PRIORITY_CONFIG[item.priority] ?? PRIORITY_CONFIG.p3;
-  const repo = REPO_CONFIG[item.repo] ?? { label: item.repo, bg: 'var(--color-stone-100)', text: 'var(--color-stone-600)' };
   const phase = getPhaseForStatus(item.status);
-  const actionLabel = isAction ? getActionLabel(item.status) : null;
-  const hint = getStatusHint(item.status);
-  const round = item.current_round ?? 0;
+  const phLabel = phase?.short ?? (QUEUE_STATUSES.includes(item.status) ? 'Q' : BLOCKED_STATUSES.includes(item.status) ? 'Blk' : '?');
+  const al = act ? actionLabel(item.status) : null;
 
   return (
-    <div className={`rounded-[8px] border px-2.5 py-1.5 transition-colors ${
-      isAction
-        ? 'border-red-200 bg-red-50 dark:border-red-900 dark:bg-red-950/40'
-        : 'border-[var(--border)] bg-[var(--card)]'
-    } ${dimmed ? 'opacity-60' : ''}`}>
-      {/* Line 1: SID · Phase · Priority · Repo · Wait · Action */}
-      <div className="flex items-center gap-1.5">
-        <Link href={`/pipeline/${item.id}`}
-          className="font-mono text-[11px] font-bold text-[var(--primary)] active:underline">
-          {sid}
-        </Link>
+    <Link href={`/pipeline/${item.id}`}
+      className={`mb-0.5 flex items-center gap-1.5 rounded-[8px] border px-2.5 py-2 transition-colors active:border-[var(--primary)] ${
+        act ? 'border-red-200 bg-red-50 dark:border-red-900 dark:bg-red-950/40' : 'border-[var(--border)] bg-[var(--card)]'
+      }`}>
+      <span className="font-mono text-[11px] font-bold text-[var(--primary)]">{sid}</span>
+      <span className="rounded-[4px] px-1 py-0.5 text-[8px] font-bold" style={{ background: phase?.bg ?? 'var(--muted)', color: phase?.text ?? 'var(--muted-foreground)' }}>{phLabel}</span>
+      <span className="min-w-0 flex-1 truncate text-[11px]">{item.title}</span>
+      <span className="text-[9px] text-[var(--muted-foreground)]">{waitTime(item.updated_at)}</span>
+      {al && (
+        <span className="rounded-[5px] px-2 py-0.5 text-[9px] font-bold text-white" style={{ background: al.bg }}>{al.text}</span>
+      )}
+    </Link>
+  );
+}
 
-        {phase && (
-          <span className="rounded-[4px] px-1 py-0.5 text-[8px] font-semibold"
-            style={{ background: phase.bg, color: phase.text }}>
-            {phase.short}
-          </span>
+/* ─── Drill View ─── */
+
+function DrillView({ plan, person, onBack }: { plan: BuildPlan; person: string; onBack: () => void }) {
+  const s = calcPlan(plan.items, person);
+
+  const pills: { label: string; color: string }[] = [];
+  if (s.des > 0) pills.push({ label: `Design ${s.des}`, color: '#8b5cf6' });
+  if (s.rev > 0) pills.push({ label: `Review ${s.rev}`, color: '#f59e0b' });
+  if (s.bld > 0) pills.push({ label: `Building ${s.bld}`, color: '#3b82f6' });
+  if (s.qa > 0) pills.push({ label: `Testing ${s.qa}`, color: '#14b8a6' });
+  if (s.done > 0) pills.push({ label: `Complete ${s.done}`, color: '#10b981' });
+  if (s.blk > 0) pills.push({ label: `Blocked ${s.blk}`, color: '#ef4444' });
+
+  const barColors: string[] = [];
+  if (s.des > 0) barColors.push('#8b5cf6');
+  if (s.rev > 0) barColors.push('#f59e0b');
+  if (s.bld > 0) barColors.push('#3b82f6');
+  if (s.qa > 0) barColors.push('#14b8a6');
+  if (s.done > 0) barColors.push('#10b981');
+  const barBg = barColors.length > 1 ? `linear-gradient(90deg, ${barColors.join(', ')})` : barColors[0] ?? 'var(--muted)';
+
+  // Sort: action first, then by phase desc
+  const sorted = [...plan.items]
+    .filter(i => !['cancelled', 'failed'].includes(i.status))
+    .sort((a, b) => {
+      const aA = isAction(a.status, person) ? 0 : 1;
+      const bA = isAction(b.status, person) ? 0 : 1;
+      if (aA !== bA) return aA - bA;
+      return getPhaseIndex(b.status) - getPhaseIndex(a.status);
+    });
+
+  return (
+    <div>
+      <button onClick={onBack} className="mb-1 flex items-center gap-1 text-xs font-semibold text-[var(--primary)]">
+        <span>&#8592;</span> All plans
+      </button>
+
+      <div className="mb-3 rounded-[12px] border border-[var(--border)] bg-[var(--card)] p-4">
+        <div className="text-[18px] font-bold">{plan.component.name}</div>
+        {plan.component.description && (
+          <p className="mt-1 text-[11px] leading-relaxed text-[var(--muted-foreground)]">{plan.component.description}</p>
         )}
-
-        {!phase && QUEUE_STATUSES.includes(item.status) && (
-          <span className="rounded-[4px] bg-[var(--muted)] px-1 py-0.5 text-[8px] text-[var(--muted-foreground)]">
-            Queue
-          </span>
-        )}
-
-        {!phase && BLOCKED_STATUSES.includes(item.status) && (
-          <span className="rounded-[4px] bg-red-100 px-1 py-0.5 text-[8px] text-red-700 dark:bg-red-900 dark:text-red-300">
-            Blk
-          </span>
-        )}
-
-        <span className="rounded-[4px] px-1 py-0.5 text-[8px] font-bold"
-          style={{ background: priority.bg, color: priority.text }}>
-          {priority.label}
-        </span>
-        <span className="rounded-[4px] px-1 py-0.5 text-[8px]"
-          style={{ background: repo.bg, color: repo.text }}>
-          {repo.label}
-        </span>
-
-        {showRound && round > 0 && (
-          <span className={`rounded-[4px] px-1 py-0.5 text-[8px] font-bold ${
-            round >= 3
-              ? 'bg-red-100 text-red-700 dark:bg-red-900 dark:text-red-300'
-              : round >= 2
-                ? 'bg-amber-100 text-amber-700 dark:bg-amber-900 dark:text-amber-300'
-                : 'bg-[var(--muted)] text-[var(--muted-foreground)]'
-          }`}>
-            R{round}
-          </span>
-        )}
-
-        {item.escalated_at && (
-          <span className="text-[10px] text-amber-500" title={item.escalation_reason ?? 'Escalated'}>&#9888;</span>
-        )}
-
-        <span className="ml-auto text-[9px] text-[var(--muted-foreground)]">
-          {waitTime(item.updated_at)}
-        </span>
-
-        {actionLabel && (
-          <InlineApproveButton itemId={item.id} label={actionLabel.text} color={actionLabel.color} />
-        )}
+        <div className="mt-2 flex items-center gap-2">
+          <span className="text-[26px] font-extrabold text-[var(--primary)]">{s.pct}%</span>
+          <span className="text-[10px] text-[var(--muted-foreground)]">{s.through}/{s.t} through pipeline</span>
+        </div>
+        <div className="mt-2 h-[5px] overflow-hidden rounded-full bg-[var(--muted)]">
+          <div className="h-full rounded-full" style={{ width: `${s.pct}%`, background: barBg }} />
+        </div>
+        <div className="mt-2 flex flex-wrap gap-1">
+          {pills.map(p => (
+            <span key={p.label} className="inline-flex items-center gap-1 rounded-[5px] bg-[var(--muted)] px-2 py-0.5 text-[10px] font-semibold">
+              <span className="inline-block h-1.5 w-1.5 rounded-full" style={{ background: p.color }} />
+              {p.label}
+            </span>
+          ))}
+        </div>
       </div>
 
-      {/* Line 2: Title + status hint */}
-      <div className="mt-0.5 flex items-baseline gap-2">
-        <Link href={`/pipeline/${item.id}`}
-          className="min-w-0 flex-1 truncate text-[11px] leading-snug text-[var(--foreground)] active:underline">
-          {item.title}
-        </Link>
-        <span className="shrink-0 text-[9px] text-[var(--muted-foreground)]">{hint}</span>
-      </div>
+      {sorted.map(item => (
+        <DrillItem key={item.id} item={item} person={person} />
+      ))}
     </div>
   );
 }
 
-/* ─── Inline approve button ─── */
+/* ─── Drill Item (expandable with chevron) ─── */
 
-function InlineApproveButton({ itemId, label, color }: { itemId: string; label: string; color: string }) {
-  const [pending, startTransition] = useTransition();
-  const [result, setResult] = useState<'idle' | 'ok' | 'err'>('idle');
+function DrillItem({ item, person }: { item: PipelineItem; person: string }) {
+  const [expanded, setExpanded] = useState(false);
+  const act = isAction(item.status, person);
+  const sid = item.id.substring(0, 8).toUpperCase();
+  const phase = getPhaseForStatus(item.status);
+  const phLabel = phase?.short ?? (QUEUE_STATUSES.includes(item.status) ? 'Q' : BLOCKED_STATUSES.includes(item.status) ? 'Blk' : '?');
+  const al = act ? actionLabel(item.status) : null;
+  const round = item.current_round ?? 0;
 
-  const handleClick = (e: React.MouseEvent) => {
-    e.preventDefault();
-    e.stopPropagation();
-    startTransition(async () => {
-      const res = await approveItem(itemId);
-      setResult(res.ok ? 'ok' : 'err');
-      setTimeout(() => setResult('idle'), 2000);
-    });
-  };
-
-  if (result === 'ok') {
-    return (
-      <span className="shrink-0 rounded-[5px] border border-emerald-300 bg-emerald-50 px-1.5 py-0.5 text-[9px] font-semibold text-emerald-700 dark:border-emerald-700 dark:bg-emerald-950 dark:text-emerald-300">
-        &#10003;
-      </span>
-    );
-  }
-
-  if (result === 'err') {
-    return (
-      <span className="shrink-0 rounded-[5px] border border-red-300 bg-red-50 px-1.5 py-0.5 text-[9px] font-semibold text-red-700 dark:border-red-700 dark:bg-red-950 dark:text-red-300">
-        &#10007;
-      </span>
-    );
-  }
+  // Chevron data
+  const phases = getPhasesForPolicy(item.execution_policy);
+  const currentIdx = getPhaseIndex(item.status);
+  const isBlocked = BLOCKED_STATUSES.includes(item.status);
+  const isQueue = QUEUE_STATUSES.includes(item.status);
 
   return (
-    <button
-      onClick={handleClick}
-      disabled={pending}
-      className="shrink-0 rounded-[5px] border px-1.5 py-0.5 text-[9px] font-semibold text-white transition-opacity active:opacity-70 disabled:opacity-50"
-      style={{ background: color, borderColor: color }}
-    >
-      {pending ? '\u2026' : label}
-    </button>
+    <div className={`mb-1 overflow-hidden rounded-[8px] border ${act ? 'border-red-200 dark:border-red-900 bg-red-50 dark:bg-red-950/40' : 'border-[var(--border)] bg-[var(--card)]'}`}>
+      <div className="flex cursor-pointer items-center gap-1.5 px-2.5 py-2 active:bg-[var(--muted)]" onClick={() => setExpanded(!expanded)}>
+        <Link href={`/pipeline/${item.id}`} onClick={e => e.stopPropagation()}
+          className="font-mono text-[11px] font-bold text-[var(--primary)]">{sid}</Link>
+        <span className="rounded-[4px] px-1 py-0.5 text-[8px] font-bold" style={{ background: phase?.bg ?? 'var(--muted)', color: phase?.text ?? 'var(--muted-foreground)' }}>{phLabel}</span>
+        {round > 0 && (
+          <span className={`rounded-[3px] px-1 py-0.5 text-[8px] font-bold ${round >= 3 ? 'bg-red-100 text-red-700 dark:bg-red-900 dark:text-red-300' : round >= 2 ? 'bg-amber-100 text-amber-700 dark:bg-amber-900 dark:text-amber-300' : 'bg-[var(--muted)] text-[var(--muted-foreground)]'}`}>
+            R{round}
+          </span>
+        )}
+        <span className="min-w-0 flex-1 truncate text-[11px]">{item.title}</span>
+        <span className="text-[9px] text-[var(--muted-foreground)]">{waitTime(item.updated_at)}</span>
+        {al && (
+          <span className="rounded-[5px] px-2 py-0.5 text-[9px] font-bold text-white" style={{ background: al.bg }}>{al.text}</span>
+        )}
+      </div>
+
+      {expanded && (
+        <div className="border-t border-[var(--border)] px-2.5 py-2">
+          <p className="mb-2 text-[10px] text-[var(--muted-foreground)]">{statusHint(item.status)}</p>
+          {/* Chevron */}
+          <div className="flex gap-0.5">
+            {phases.map((ph) => {
+              const gIdx = PIPELINE_PHASES.findIndex(p => p.key === ph.key);
+              let color = 'var(--muted)';
+              if (!isBlocked && !isQueue) {
+                if (gIdx < currentIdx) color = ph.dot;
+                else if (gIdx === currentIdx) color = ph.dot;
+              }
+              return (
+                <div key={ph.key} className="h-[5px] flex-1 rounded-full" style={{
+                  background: color,
+                  opacity: gIdx === currentIdx ? 1 : gIdx < currentIdx ? 0.8 : 0.2,
+                  animation: gIdx === currentIdx && !isBlocked && !isQueue ? 'pulse 2s ease-in-out infinite' : undefined,
+                }} />
+              );
+            })}
+          </div>
+          <div className="mt-1 flex justify-between text-[7px] text-[var(--muted-foreground)]">
+            {phases.map((ph) => {
+              const gIdx = PIPELINE_PHASES.findIndex(p => p.key === ph.key);
+              if (gIdx < currentIdx) return <span key={ph.key} className="text-emerald-500">{'\u2713'}{ph.short}</span>;
+              if (gIdx === currentIdx) return <span key={ph.key} className="font-bold" style={{ color: ph.dot }}>{ph.short}</span>;
+              return <span key={ph.key}>{ph.short}</span>;
+            })}
+          </div>
+        </div>
+      )}
+    </div>
   );
 }

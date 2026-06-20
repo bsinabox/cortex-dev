@@ -20,6 +20,7 @@ export type PipelineItem = {
   escalation_reason: string | null;
   current_round: number;
   execution_policy: string | null;
+  component_id: string | null;
 };
 
 interface ItemCardProps {
