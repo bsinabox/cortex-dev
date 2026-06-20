@@ -9,7 +9,7 @@ export default async function PipelinePage() {
 
   const { data, error } = await supabase
     .from('agentic_items')
-    .select('id, title, status, priority, repo, batch_id, updated_at, escalated_at, escalation_reason, current_round')
+    .select('id, title, status, priority, repo, batch_id, execution_policy, updated_at, escalated_at, escalation_reason, current_round')
     .not('status', 'in', '(cancelled,failed)')
     .order('updated_at', { ascending: false });
 
@@ -32,6 +32,7 @@ export default async function PipelinePage() {
     priority: row.priority ?? 'p3',
     repo: row.repo ?? '',
     batch_id: row.batch_id ?? null,
+    execution_policy: row.execution_policy ?? null,
     updated_at: row.updated_at ?? new Date().toISOString(),
     escalated_at: row.escalated_at ?? null,
     escalation_reason: row.escalation_reason ?? null,

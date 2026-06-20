@@ -19,6 +19,7 @@ export type PipelineItem = {
   escalated_at: string | null;
   escalation_reason: string | null;
   current_round: number;
+  execution_policy: string | null;
 };
 
 interface ItemCardProps {
@@ -72,7 +73,7 @@ export function ItemCard({ item }: ItemCardProps) {
           {repo.label}
         </span>
         <span className="text-[10px] text-[var(--muted-foreground)] lg:text-[11px]">
-          {statusLabel} · {timeAgo(item.updated_at)}
+          {statusLabel} &middot; {timeAgo(item.updated_at)}
         </span>
       </div>
     </Link>

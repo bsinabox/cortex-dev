@@ -96,6 +96,56 @@ export const PIPELINE_COLUMNS: StatusColumn[] = [
   },
 ];
 
+// ── Pipeline Phases (for chevron progress + status board) ──
+
+export type PipelinePhase = {
+  key: string;
+  label: string;
+  short: string;
+  statuses: string[];
+  bg: string;
+  text: string;
+  dot: string;
+};
+
+export const PIPELINE_PHASES: PipelinePhase[] = [
+  { key: 'design',  label: 'Design',  short: 'Des', statuses: ['designing', 'cross_review', 'design_conflict'], bg: '#EDE9FE', text: '#6D28D9', dot: '#8B5CF6' },
+  { key: 'review',  label: 'Review',  short: 'Rev', statuses: ['human_review', 'design_review_hold'],           bg: '#FEF3C7', text: '#92400E', dot: '#F59E0B' },
+  { key: 'build',   label: 'Build',   short: 'Bld', statuses: ['approved', 'executing'],                        bg: '#DBEAFE', text: '#1E40AF', dot: '#3B82F6' },
+  { key: 'qa',      label: 'QA',      short: 'QA',  statuses: ['qa', 'testing_in_dev'],                         bg: '#CCFBF1', text: '#0F766E', dot: '#14B8A6' },
+  { key: 'uat',     label: 'UAT',     short: 'UAT', statuses: ['promotion_review'],                             bg: '#FCE7F3', text: '#9D174D', dot: '#EC4899' },
+  { key: 'prod',    label: 'Prod',    short: 'Prd', statuses: ['promoting', 'waiting_migration', 'waiting_prod_evidence'], bg: '#D1FAE5', text: '#065F46', dot: '#10B981' },
+];
+
+// Non-pipeline categories
+export const QUEUE_STATUSES = ['intake', 'awaiting_hub_design'];
+export const BLOCKED_STATUSES = ['blocked', 'readiness_blocked', 'waiting_on_dependency', 'decomposed'];
+export const DONE_STATUSES = ['done', 'subtasks_complete'];
+
+/** Get current pipeline phase index for a status (-1 = pre-pipeline, 6 = done) */
+export function getPhaseIndex(status: string): number {
+  if (DONE_STATUSES.includes(status)) return PIPELINE_PHASES.length; // past all phases
+  for (let i = 0; i < PIPELINE_PHASES.length; i++) {
+    if (PIPELINE_PHASES[i].statuses.includes(status)) return i;
+  }
+  return -1; // queue or blocked — not in pipeline flow
+}
+
+/** Get the phase config for a status, or null */
+export function getPhaseForStatus(status: string): PipelinePhase | null {
+  for (const phase of PIPELINE_PHASES) {
+    if (phase.statuses.includes(status)) return phase;
+  }
+  return null;
+}
+
+/** Which pipeline phases to show for an item (MVP skips UAT) */
+export function getPhasesForPolicy(executionPolicy: string | null): PipelinePhase[] {
+  if (executionPolicy === 'launched_dev_to_uat_to_prod') return PIPELINE_PHASES;
+  // MVP items skip UAT
+  return PIPELINE_PHASES.filter(p => p.key !== 'uat');
+}
+
 // Human-gate statuses (items needing human action)
 export const HUMAN_GATE_STATUSES = [
   'human_review',
@@ -218,7 +268,7 @@ export function timeAgo(date: string | Date): string {
 
 // Duration formatter for worker sessions
 export function formatDuration(minutes: number | null): string {
-  if (minutes == null) return '—';
+  if (minutes == null) return '\u2014';
   if (minutes < 1) return '<1m';
   if (minutes < 60) return `${minutes}m`;
   const h = Math.floor(minutes / 60);
@@ -234,4 +284,18 @@ export function heartbeatStatus(lastHeartbeat: string | null): 'healthy' | 'warn
   if (ageMins < 5) return 'healthy';
   if (ageMins < 15) return 'warning';
   return 'stale';
+}
+
+// Wait time — compact human-readable duration since a timestamp
+export function waitTime(date: string | Date): string {
+  const now = Date.now();
+  const then = new Date(date).getTime();
+  const diffMs = now - then;
+  const mins = Math.floor(diffMs / 60000);
+  if (mins < 1) return '<1m';
+  if (mins < 60) return `${mins}m`;
+  const hours = Math.floor(mins / 60);
+  if (hours < 24) return `${hours}h`;
+  const days = Math.floor(hours / 24);
+  return `${days}d`;
 }

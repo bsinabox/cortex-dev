@@ -1,13 +1,16 @@
 'use client';
 
-import { useState, useMemo, useEffect, useRef, useCallback } from 'react';
+import { useState, useMemo, useEffect, useRef, useCallback, useTransition } from 'react';
 import Link from 'next/link';
 import { useRealtimeTable } from '@/hooks/useRealtimeTable';
 import { type PipelineItem } from '@/components/ItemCard';
-import { PRIORITY_CONFIG, REPO_CONFIG, STATUS_LABELS, timeAgo } from '@/lib/constants';
-// Inline mini copy button — no external dependency
+import {
+  PRIORITY_CONFIG, REPO_CONFIG, PIPELINE_PHASES, getPhaseIndex, getPhaseForStatus,
+  QUEUE_STATUSES, BLOCKED_STATUSES, DONE_STATUSES, waitTime,
+} from '@/lib/constants';
+import { approveItem } from './actions';
 
-/* ─── Person filter — who is the next actor ─── */
+/* ─── Person filter logic ─── */
 
 const SCOTT_ACTS_ON = new Set([
   'testing_in_dev', 'awaiting_hub_design', 'intake', 'designing',
@@ -17,124 +20,71 @@ const SCOTT_ACTS_ON = new Set([
 const BRIAN_ACTS_ON = new Set([
   'human_review', 'design_review_hold', 'promotion_review',
 ]);
-// Autonomous + done statuses shown for everyone
-const SHARED_STATUSES = new Set([
-  'approved', 'executing', 'qa', 'promoting',
-  'waiting_migration', 'waiting_prod_evidence',
-  'done', 'subtasks_complete',
-]);
 
-/* ─── Section definitions ─── */
+function isActionFor(status: string, person: 'scott' | 'brian' | 'all'): boolean {
+  if (person === 'all') return SCOTT_ACTS_ON.has(status) || BRIAN_ACTS_ON.has(status);
+  if (person === 'scott') return SCOTT_ACTS_ON.has(status);
+  return BRIAN_ACTS_ON.has(status);
+}
 
-type SectionDef = {
-  key: string;
-  label: string;
-  description: string;
-  icon: string;
-  accentBg: string;
-  accentText: string;
-  statuses: string[];
-  defaultOpen: boolean;
-};
+function isWaitingOnOther(status: string, person: 'scott' | 'brian' | 'all'): boolean {
+  if (person === 'all') return false;
+  if (person === 'scott') return BRIAN_ACTS_ON.has(status);
+  return SCOTT_ACTS_ON.has(status);
+}
 
-const SECTIONS: SectionDef[] = [
-  {
-    key: 'action',
-    label: 'Action needed',
-    description: 'You need to review, test, or approve these items to keep them moving.',
-    icon: '!',
-    accentBg: '#FEE2E2',
-    accentText: '#991B1B',
-    statuses: ['human_review', 'testing_in_dev', 'design_review_hold', 'promotion_review'],
-    defaultOpen: true,
-  },
-  {
-    key: 'autonomous',
-    label: 'Autonomous',
-    description: 'Conductor is actively building or reviewing. No action needed — monitor only.',
-    icon: '\u2699',
-    accentBg: '#DBEAFE',
-    accentText: '#1E40AF',
-    statuses: ['approved', 'executing', 'qa'],
-    defaultOpen: true,
-  },
-  {
-    key: 'design',
-    label: 'In design',
-    description: 'Being designed in Hub conversations. Open a chat to continue.',
-    icon: '\u270F',
-    accentBg: '#EDE9FE',
-    accentText: '#6D28D9',
-    statuses: ['designing', 'cross_review', 'design_conflict'],
-    defaultOpen: true,
-  },
-  {
-    key: 'queue',
-    label: 'Queue',
-    description: 'Waiting for a Hub design session to get started. Prioritized by P-level.',
-    icon: '\u2630',
-    accentBg: 'var(--color-stone-100)',
-    accentText: 'var(--color-stone-600)',
-    statuses: ['intake', 'awaiting_hub_design'],
-    defaultOpen: false,
-  },
-  {
-    key: 'promoting',
-    label: 'Promoting',
-    description: 'Verified and moving through the promotion pipeline to production.',
-    icon: '\u2191',
-    accentBg: '#F3E8FF',
-    accentText: '#7C3AED',
-    statuses: ['promoting', 'waiting_migration', 'waiting_prod_evidence'],
-    defaultOpen: true,
-  },
-  {
-    key: 'blocked',
-    label: 'Blocked',
-    description: 'Stuck — needs manual intervention or a dependency resolved.',
-    icon: '\u26A0',
-    accentBg: '#FEF3C7',
-    accentText: '#92400E',
-    statuses: ['blocked', 'readiness_blocked', 'waiting_on_dependency', 'decomposed'],
-    defaultOpen: true,
-  },
-  {
-    key: 'done',
-    label: 'Done',
-    description: 'Completed and deployed. No further action.',
-    icon: '\u2713',
-    accentBg: '#D1FAE5',
-    accentText: '#065F46',
-    statuses: ['done', 'subtasks_complete'],
-    defaultOpen: false,
-  },
-];
+/* ─── Sort helpers ─── */
 
-/* ─── Action summaries ─── */
+function sortGroup(a: PipelineItem, b: PipelineItem): number {
+  // By phase index (furthest along first for action visibility)
+  const phaseA = getPhaseIndex(a.status);
+  const phaseB = getPhaseIndex(b.status);
+  if (phaseA !== phaseB) return phaseB - phaseA;
+  // Then priority
+  const pOrder = ['p0', 'p1', 'p2', 'p3'];
+  const pDiff = pOrder.indexOf(a.priority) - pOrder.indexOf(b.priority);
+  if (pDiff !== 0) return pDiff;
+  // Then recency
+  return new Date(b.updated_at).getTime() - new Date(a.updated_at).getTime();
+}
 
-function getActionLine(status: string): string {
+/* ─── Action label for inline display ─── */
+
+function getActionLabel(status: string): { text: string; color: string } | null {
   switch (status) {
-    case 'human_review': return 'Approve design or request changes';
-    case 'testing_in_dev': return 'Verify changes on dev, then promote';
-    case 'design_review_hold': return 'Review QA escalation findings';
-    case 'promotion_review': return 'Approve production deploy';
-    case 'approved': return 'Worker assigned, build starting';
-    case 'executing': return 'Worker actively writing code';
-    case 'qa': return 'Build complete, running QA checks';
-    case 'designing': return 'Claude drafting solution design';
-    case 'cross_review': return 'Codex reviewing Claude design';
-    case 'design_conflict': return 'Design conflict — needs resolution';
-    case 'intake': return 'Waiting for design session';
-    case 'awaiting_hub_design': return 'Start Hub chat to begin design';
-    case 'promoting': return 'Deploying to production';
-    case 'waiting_migration': return 'Running migrations';
-    case 'waiting_prod_evidence': return 'Collecting deploy evidence';
-    case 'blocked': return 'Manual intervention needed';
+    case 'human_review':       return { text: 'Ship', color: '#059669' };
+    case 'design_review_hold': return { text: 'Ship', color: '#059669' };
+    case 'testing_in_dev':     return { text: 'Test', color: '#0F766E' };
+    case 'promotion_review':   return { text: 'Promote', color: '#7C3AED' };
+    default: return null;
+  }
+}
+
+/* ─── Status description ─── */
+
+function getStatusHint(status: string): string {
+  switch (status) {
+    case 'human_review': return 'Approve or request changes';
+    case 'testing_in_dev': return 'Verify on dev, then promote';
+    case 'design_review_hold': return 'Review QA findings';
+    case 'promotion_review': return 'Approve for production';
+    case 'approved': return 'Worker assigned';
+    case 'executing': return 'Building...';
+    case 'qa': return 'Running QA';
+    case 'designing': return 'Design in progress';
+    case 'cross_review': return 'Codex reviewing';
+    case 'design_conflict': return 'Needs resolution';
+    case 'intake': return 'Needs design session';
+    case 'awaiting_hub_design': return 'Start Hub chat';
+    case 'promoting': return 'Deploying to prod';
+    case 'waiting_migration': return 'Migrations running';
+    case 'waiting_prod_evidence': return 'Collecting evidence';
+    case 'blocked': return 'Manual intervention';
     case 'readiness_blocked': return 'Prerequisites missing';
-    case 'waiting_on_dependency': return 'Waiting on another item';
+    case 'waiting_on_dependency': return 'Blocked by dep';
     case 'decomposed': return 'Split into subtasks';
-    case 'done': return 'Deployed and verified';
-    case 'subtasks_complete': return 'All subtasks finished';
+    case 'done': return 'Complete';
+    case 'subtasks_complete': return 'Subtasks done';
     default: return status;
   }
 }
@@ -155,13 +105,7 @@ export function PipelineBoard({ initialItems }: PipelineBoardProps) {
 
   const [repoFilter, setRepoFilter] = useState<string>('all');
   const [personFilter, setPersonFilter] = useState<'scott' | 'brian' | 'all'>('scott');
-  const [collapsed, setCollapsed] = useState<Set<string>>(() => {
-    const set = new Set<string>();
-    for (const s of SECTIONS) {
-      if (!s.defaultOpen) set.add(s.key);
-    }
-    return set;
-  });
+  const [showDone, setShowDone] = useState(false);
 
   // Pull-to-refresh
   const [pullDistance, setPullDistance] = useState(0);
@@ -183,15 +127,7 @@ export function PipelineBoard({ initialItems }: PipelineBoardProps) {
     try { localStorage.setItem('cortex-repo-filter', value); } catch { /* */ }
   };
 
-  const toggleSection = (key: string) => {
-    setCollapsed((prev) => {
-      const next = new Set(prev);
-      if (next.has(key)) { next.delete(key); } else { next.add(key); }
-      return next;
-    });
-  };
-
-  // Pull-to-refresh
+  // Pull-to-refresh handlers
   const handleTouchStart = useCallback((e: React.TouchEvent) => {
     if (window.scrollY === 0) touchStartY.current = e.touches[0].clientY;
   }, []);
@@ -210,70 +146,69 @@ export function PipelineBoard({ initialItems }: PipelineBoardProps) {
     setPullDistance(0);
   }, [pullDistance, refreshing, refresh]);
 
-  // Filter items by repo only — person toggle changes section assignment, not visibility
+  // Filter by repo
   const filtered = useMemo(() => {
-    if (repoFilter === 'all') return items;
-    return items.filter((i) => i.repo === repoFilter);
+    let list = items.filter(i => !['cancelled', 'failed'].includes(i.status));
+    if (repoFilter !== 'all') list = list.filter(i => i.repo === repoFilter);
+    return list;
   }, [items, repoFilter]);
 
-  // Build sections — person toggle changes what goes in "Action needed" vs "Waiting on other"
-  const sectionData = useMemo(() => {
-    // Dynamic sections based on person filter
-    const dynamicSections: SectionDef[] = [];
+  // Phase counts for summary bar
+  const phaseCounts = useMemo(() => {
+    const counts: Record<string, number> = {};
+    for (const p of PIPELINE_PHASES) counts[p.key] = 0;
+    counts['queue'] = 0;
+    counts['blocked'] = 0;
+    counts['done'] = 0;
+    for (const item of filtered) {
+      if (QUEUE_STATUSES.includes(item.status)) { counts['queue']++; continue; }
+      if (BLOCKED_STATUSES.includes(item.status)) { counts['blocked']++; continue; }
+      if (DONE_STATUSES.includes(item.status)) { counts['done']++; continue; }
+      const phase = getPhaseForStatus(item.status);
+      if (phase) counts[phase.key]++;
+    }
+    return counts;
+  }, [filtered]);
 
-    if (personFilter === 'scott') {
-      // Scott's action items: testing, blocked
-      dynamicSections.push({
-        ...SECTIONS.find(s => s.key === 'action')!,
-        statuses: ['testing_in_dev'],
-        description: 'Items you need to verify or test on dev.',
-      });
-      // Brian's queue — items waiting on Brian
-      dynamicSections.push({
-        key: 'waiting_brian',
-        label: 'Waiting on Brian',
-        description: 'Submitted for approval — Brian needs to review these.',
-        icon: '\u23F3',
-        accentBg: '#FEF3C7',
-        accentText: '#92400E',
-        statuses: ['human_review', 'design_review_hold', 'promotion_review'],
-        defaultOpen: false,
-      });
-    } else if (personFilter === 'brian') {
-      // Brian's action items: approvals
-      dynamicSections.push({
-        ...SECTIONS.find(s => s.key === 'action')!,
-        statuses: ['human_review', 'design_review_hold', 'promotion_review'],
-        description: 'Items waiting for approval or review.',
-      });
-    } else {
-      // All — show combined action section
-      dynamicSections.push(SECTIONS.find(s => s.key === 'action')!);
+  // Sort into groups
+  const { actionItems, waitingItems, autonomousItems, blockedItems, queueItems, doneItems } = useMemo(() => {
+    const action: PipelineItem[] = [];
+    const waiting: PipelineItem[] = [];
+    const autonomous: PipelineItem[] = [];
+    const blocked: PipelineItem[] = [];
+    const queue: PipelineItem[] = [];
+    const done: PipelineItem[] = [];
+
+    for (const item of filtered) {
+      if (DONE_STATUSES.includes(item.status)) { done.push(item); continue; }
+      if (QUEUE_STATUSES.includes(item.status)) { queue.push(item); continue; }
+      if (BLOCKED_STATUSES.includes(item.status)) { blocked.push(item); continue; }
+
+      if (isActionFor(item.status, personFilter)) {
+        action.push(item);
+      } else if (isWaitingOnOther(item.status, personFilter)) {
+        waiting.push(item);
+      } else {
+        autonomous.push(item);
+      }
     }
 
-    // Add remaining static sections
-    for (const sec of SECTIONS) {
-      if (sec.key === 'action') continue; // already handled
-      dynamicSections.push(sec);
-    }
+    action.sort(sortGroup);
+    waiting.sort(sortGroup);
+    autonomous.sort(sortGroup);
+    blocked.sort(sortGroup);
+    queue.sort((a, b) => {
+      const pOrder = ['p0', 'p1', 'p2', 'p3'];
+      const pDiff = pOrder.indexOf(a.priority) - pOrder.indexOf(b.priority);
+      if (pDiff !== 0) return pDiff;
+      return new Date(b.updated_at).getTime() - new Date(a.updated_at).getTime();
+    });
+    done.sort((a, b) => new Date(b.updated_at).getTime() - new Date(a.updated_at).getTime());
 
-    return dynamicSections.map((sec) => {
-      const sectionItems = filtered
-        .filter((item) => sec.statuses.includes(item.status))
-        .sort((a, b) => {
-          if (sec.key === 'queue') {
-            const pOrder = ['p0', 'p1', 'p2', 'p3'];
-            const pDiff = pOrder.indexOf(a.priority) - pOrder.indexOf(b.priority);
-            if (pDiff !== 0) return pDiff;
-          }
-          return new Date(b.updated_at).getTime() - new Date(a.updated_at).getTime();
-        });
-      return { ...sec, items: sectionItems };
-    }).filter((sec) => sec.items.length > 0);
+    return { actionItems: action, waitingItems: waiting, autonomousItems: autonomous, blockedItems: blocked, queueItems: queue, doneItems: done };
   }, [filtered, personFilter]);
 
-  const actionCount = sectionData.find(s => s.key === 'action')?.items.length ?? 0;
-  const totalActive = sectionData.reduce((sum, s) => s.key !== 'done' ? sum + s.items.length : sum, 0);
+  const totalActive = filtered.length - doneItems.length;
 
   return (
     <div
@@ -292,8 +227,7 @@ export function PipelineBoard({ initialItems }: PipelineBoardProps) {
       )}
 
       {/* Filter bar */}
-      <div className="mb-3 flex items-center gap-1.5">
-        {/* Person toggle */}
+      <div className="mb-2 flex items-center gap-1.5">
         <div className="flex rounded-[8px] border border-[var(--border)] overflow-hidden">
           {(['scott', 'brian', 'all'] as const).map((p) => (
             <button key={p} onClick={() => setPersonFilter(p)}
@@ -319,55 +253,107 @@ export function PipelineBoard({ initialItems }: PipelineBoardProps) {
         </select>
 
         <span className="ml-auto text-[11px] text-[var(--muted-foreground)]">
-          {actionCount > 0 && (
-            <span className="mr-2 font-semibold text-red-500">{actionCount} action</span>
+          {actionItems.length > 0 && (
+            <span className="mr-1.5 font-semibold text-red-500">{actionItems.length} action</span>
           )}
           {totalActive} active
         </span>
       </div>
 
-      {/* Sections */}
-      <div className="space-y-2">
-        {sectionData.map((sec) => {
-          const isCollapsed = collapsed.has(sec.key);
-          return (
-            <div key={sec.key} className="rounded-[10px] border border-[var(--border)] bg-[var(--muted)]">
-              {/* Section header */}
-              <button
-                onClick={() => toggleSection(sec.key)}
-                className="flex w-full items-center gap-2 rounded-t-[10px] px-3 py-2"
-                style={{ background: sec.accentBg }}
-              >
-                <svg className={`h-3 w-3 shrink-0 transition-transform ${isCollapsed ? '' : 'rotate-90'}`}
-                  style={{ color: sec.accentText }} fill="currentColor" viewBox="0 0 20 20">
-                  <path fillRule="evenodd" d="M7.21 14.77a.75.75 0 01.02-1.06L11.168 10 7.23 6.29a.75.75 0 111.04-1.08l4.5 4.25a.75.75 0 010 1.08l-4.5 4.25a.75.75 0 01-1.06-.02z" clipRule="evenodd" />
-                </svg>
-                <span className="text-sm font-semibold" style={{ color: sec.accentText }}>
-                  {sec.icon} {sec.label}
-                </span>
-                <span className="flex h-5 min-w-5 items-center justify-center rounded-full text-[10px] font-bold"
-                  style={{ background: sec.accentText, color: sec.accentBg }}>
-                  {sec.items.length}
-                </span>
-              </button>
+      {/* Phase summary bar */}
+      <div className="mb-3 flex flex-wrap gap-x-2 gap-y-1 rounded-[8px] border border-[var(--border)] bg-[var(--card)] px-2.5 py-1.5">
+        {PIPELINE_PHASES.map((phase) => (
+          <span key={phase.key} className="flex items-center gap-1 text-[10px]">
+            <span className="inline-block h-2 w-2 rounded-full" style={{ background: phase.dot }} />
+            <span style={{ color: phase.text }} className="font-medium">{phase.short}</span>
+            <span className="text-[var(--muted-foreground)]">{phaseCounts[phase.key] || 0}</span>
+          </span>
+        ))}
+        <span className="flex items-center gap-1 text-[10px]">
+          <span className="inline-block h-2 w-2 rounded-full bg-[var(--muted-foreground)]" style={{ opacity: 0.4 }} />
+          <span className="text-[var(--muted-foreground)]">Q {phaseCounts['queue'] || 0}</span>
+        </span>
+        {(phaseCounts['blocked'] || 0) > 0 && (
+          <span className="flex items-center gap-1 text-[10px]">
+            <span className="inline-block h-2 w-2 rounded-full" style={{ background: '#EF4444' }} />
+            <span className="text-red-500">Blk {phaseCounts['blocked']}</span>
+          </span>
+        )}
+      </div>
 
-              {!isCollapsed && (
-                <div className="p-1.5">
-                  <p className="mb-1.5 px-1.5 text-[10px] leading-relaxed text-[var(--muted-foreground)]">
-                    {sec.description}
-                  </p>
-                  <div className="space-y-1">
-                    {sec.items.map((item) => (
-                      <CompactItemCard key={item.id} item={item} showAction={sec.key === 'action'} />
-                    ))}
-                  </div>
-                </div>
-              )}
-            </div>
-          );
-        })}
+      {/* ─── Status Board rows ─── */}
+      <div className="space-y-0.5">
 
-        {sectionData.length === 0 && (
+        {/* ACTION NEEDED */}
+        {actionItems.length > 0 && (
+          <>
+            <SectionLabel label="Action needed" count={actionItems.length} accent="#991B1B" />
+            {actionItems.map((item) => (
+              <BoardRow key={item.id} item={item} isAction />
+            ))}
+          </>
+        )}
+
+        {/* WAITING ON OTHER */}
+        {waitingItems.length > 0 && (
+          <>
+            <SectionLabel
+              label={personFilter === 'scott' ? 'Waiting on Brian' : personFilter === 'brian' ? 'Waiting on Scott' : ''}
+              count={waitingItems.length}
+              accent="#92400E"
+            />
+            {waitingItems.map((item) => (
+              <BoardRow key={item.id} item={item} />
+            ))}
+          </>
+        )}
+
+        {/* AUTONOMOUS */}
+        {autonomousItems.length > 0 && (
+          <>
+            <SectionLabel label="Autonomous" count={autonomousItems.length} accent="#1E40AF" />
+            {autonomousItems.map((item) => (
+              <BoardRow key={item.id} item={item} />
+            ))}
+          </>
+        )}
+
+        {/* BLOCKED */}
+        {blockedItems.length > 0 && (
+          <>
+            <SectionLabel label="Blocked" count={blockedItems.length} accent="#DC2626" />
+            {blockedItems.map((item) => (
+              <BoardRow key={item.id} item={item} />
+            ))}
+          </>
+        )}
+
+        {/* QUEUE */}
+        {queueItems.length > 0 && (
+          <>
+            <SectionLabel label="Queue" count={queueItems.length} accent="var(--muted-foreground)" />
+            {queueItems.map((item) => (
+              <BoardRow key={item.id} item={item} dimmed />
+            ))}
+          </>
+        )}
+
+        {/* DONE */}
+        {doneItems.length > 0 && (
+          <button onClick={() => setShowDone(!showDone)}
+            className="mt-1 flex w-full items-center gap-1.5 rounded-[6px] px-2 py-1 text-[10px] text-[var(--muted-foreground)] hover:bg-[var(--muted)]">
+            <svg className={`h-2.5 w-2.5 transition-transform ${showDone ? 'rotate-90' : ''}`}
+              fill="currentColor" viewBox="0 0 20 20">
+              <path fillRule="evenodd" d="M7.21 14.77a.75.75 0 01.02-1.06L11.168 10 7.23 6.29a.75.75 0 111.04-1.08l4.5 4.25a.75.75 0 010 1.08l-4.5 4.25a.75.75 0 01-1.06-.02z" clipRule="evenodd" />
+            </svg>
+            Done ({doneItems.length})
+          </button>
+        )}
+        {showDone && doneItems.map((item) => (
+          <BoardRow key={item.id} item={item} dimmed />
+        ))}
+
+        {filtered.length === 0 && (
           <div className="rounded-[10px] border border-[var(--border)] bg-[var(--card)] px-6 py-12 text-center">
             <p className="text-sm text-[var(--muted-foreground)]">No items match current filter</p>
           </div>
@@ -377,85 +363,139 @@ export function PipelineBoard({ initialItems }: PipelineBoardProps) {
   );
 }
 
-/* ─── Compact item card with action line ─── */
+/* ─── Lightweight section divider ─── */
 
-function CompactItemCard({ item, showAction }: { item: PipelineItem; showAction: boolean }) {
+function SectionLabel({ label, count, accent }: { label: string; count: number; accent: string }) {
+  if (!label) return null;
+  return (
+    <div className="flex items-center gap-1.5 px-1 pb-0.5 pt-2 first:pt-0">
+      <span className="text-[10px] font-semibold uppercase tracking-wider" style={{ color: accent }}>
+        {label}
+      </span>
+      <span className="flex h-4 min-w-4 items-center justify-center rounded-full text-[9px] font-bold text-white"
+        style={{ background: accent }}>
+        {count}
+      </span>
+    </div>
+  );
+}
+
+/* ─── Dense board row — 2 lines per item ─── */
+
+function BoardRow({ item, isAction, dimmed }: { item: PipelineItem; isAction?: boolean; dimmed?: boolean }) {
   const sid = item.id.substring(0, 8).toUpperCase();
   const priority = PRIORITY_CONFIG[item.priority] ?? PRIORITY_CONFIG.p3;
   const repo = REPO_CONFIG[item.repo] ?? { label: item.repo, bg: 'var(--color-stone-100)', text: 'var(--color-stone-600)' };
-  const statusLabel = STATUS_LABELS[item.status] ?? item.status;
-  const actionLine = getActionLine(item.status);
-
-  const bootPrompt = `Boot up conductor item ${sid}.\n\nSteps:\n1. Run mandatory timestamp.\n2. Query live state from Supabase (project ftpbxlizcsbzvmtbtuef):\n   - Item: SELECT * FROM agentic_items WHERE UPPER(LEFT(id::text, 8)) = '${sid}'\n   - Messages, revisions, jobs, workers for item_id = '${item.id}'\n3. Repo is ${item.repo} — read relevant source from VPS.\n4. Report full context and recommend next action.\n\nBegin.`;
+  const phase = getPhaseForStatus(item.status);
+  const actionLabel = isAction ? getActionLabel(item.status) : null;
+  const hint = getStatusHint(item.status);
 
   return (
-    <div className="rounded-[8px] border border-[var(--border)] bg-[var(--card)] p-2.5">
-      {/* Row 1: SID + priority + repo + time */}
+    <div className={`rounded-[8px] border px-2.5 py-1.5 transition-colors ${
+      isAction
+        ? 'border-red-200 bg-red-50 dark:border-red-900 dark:bg-red-950/40'
+        : 'border-[var(--border)] bg-[var(--card)]'
+    } ${dimmed ? 'opacity-60' : ''}`}>
+      {/* Line 1: SID · Phase · Priority · Repo · Wait · Action */}
       <div className="flex items-center gap-1.5">
-        <Link href={`/pipeline/${item.id}`} className="font-mono text-[11px] font-bold text-[var(--primary)] active:underline">
+        <Link href={`/pipeline/${item.id}`}
+          className="font-mono text-[11px] font-bold text-[var(--primary)] active:underline">
           {sid}
         </Link>
+
+        {phase && (
+          <span className="rounded-[4px] px-1 py-0.5 text-[8px] font-semibold"
+            style={{ background: phase.bg, color: phase.text }}>
+            {phase.short}
+          </span>
+        )}
+
+        {!phase && QUEUE_STATUSES.includes(item.status) && (
+          <span className="rounded-[4px] bg-[var(--muted)] px-1 py-0.5 text-[8px] text-[var(--muted-foreground)]">
+            Queue
+          </span>
+        )}
+
+        {!phase && BLOCKED_STATUSES.includes(item.status) && (
+          <span className="rounded-[4px] bg-red-100 px-1 py-0.5 text-[8px] text-red-700 dark:bg-red-900 dark:text-red-300">
+            Blk
+          </span>
+        )}
+
         <span className="rounded-[4px] px-1 py-0.5 text-[8px] font-bold"
           style={{ background: priority.bg, color: priority.text }}>
           {priority.label}
         </span>
-        <span className="rounded-[4px] px-1 py-0.5 text-[8px] font-medium"
+        <span className="rounded-[4px] px-1 py-0.5 text-[8px]"
           style={{ background: repo.bg, color: repo.text }}>
           {repo.label}
         </span>
+
         {item.escalated_at && (
           <span className="text-[10px] text-amber-500" title={item.escalation_reason ?? 'Escalated'}>&#9888;</span>
         )}
+
         <span className="ml-auto text-[9px] text-[var(--muted-foreground)]">
-          {timeAgo(item.updated_at)}
+          {waitTime(item.updated_at)}
         </span>
+
+        {actionLabel && (
+          <InlineApproveButton itemId={item.id} label={actionLabel.text} color={actionLabel.color} />
+        )}
       </div>
 
-      {/* Row 2: Title */}
-      <p className="mt-1 line-clamp-1 text-[12px] leading-snug text-[var(--foreground)]">
-        {item.title}
-      </p>
-
-      {/* Row 3: Action line + boot button */}
-      <div className="mt-1 flex items-center gap-2">
-        <span className={`flex-1 text-[10px] ${showAction ? 'font-semibold text-red-600 dark:text-red-400' : 'text-[var(--muted-foreground)]'}`}>
-          {showAction ? '\u2794 ' : ''}{actionLine}
-        </span>
-        <MiniCopyButton text={bootPrompt} />
+      {/* Line 2: Title + status hint */}
+      <div className="mt-0.5 flex items-baseline gap-2">
+        <Link href={`/pipeline/${item.id}`}
+          className="min-w-0 flex-1 truncate text-[11px] leading-snug text-[var(--foreground)] active:underline">
+          {item.title}
+        </Link>
+        <span className="shrink-0 text-[9px] text-[var(--muted-foreground)]">{hint}</span>
       </div>
     </div>
   );
 }
 
-/* ─── Mini copy button ─── */
+/* ─── Inline approve button ─── */
 
-function MiniCopyButton({ text }: { text: string }) {
-  const [copied, setCopied] = useState(false);
-  const handleCopy = async () => {
-    try {
-      await navigator.clipboard.writeText(text);
-    } catch {
-      const ta = document.createElement('textarea');
-      ta.value = text;
-      ta.style.position = 'fixed';
-      ta.style.opacity = '0';
-      document.body.appendChild(ta);
-      ta.select();
-      document.execCommand('copy');
-      document.body.removeChild(ta);
-    }
-    setCopied(true);
-    setTimeout(() => setCopied(false), 1500);
+function InlineApproveButton({ itemId, label, color }: { itemId: string; label: string; color: string }) {
+  const [pending, startTransition] = useTransition();
+  const [result, setResult] = useState<'idle' | 'ok' | 'err'>('idle');
+
+  const handleClick = (e: React.MouseEvent) => {
+    e.preventDefault();
+    e.stopPropagation();
+    startTransition(async () => {
+      const res = await approveItem(itemId);
+      setResult(res.ok ? 'ok' : 'err');
+      setTimeout(() => setResult('idle'), 2000);
+    });
   };
 
+  if (result === 'ok') {
+    return (
+      <span className="shrink-0 rounded-[5px] border border-emerald-300 bg-emerald-50 px-1.5 py-0.5 text-[9px] font-semibold text-emerald-700 dark:border-emerald-700 dark:bg-emerald-950 dark:text-emerald-300">
+        &#10003;
+      </span>
+    );
+  }
+
+  if (result === 'err') {
+    return (
+      <span className="shrink-0 rounded-[5px] border border-red-300 bg-red-50 px-1.5 py-0.5 text-[9px] font-semibold text-red-700 dark:border-red-700 dark:bg-red-950 dark:text-red-300">
+        &#10007;
+      </span>
+    );
+  }
+
   return (
-    <button onClick={handleCopy}
-      className={`shrink-0 rounded-[6px] border px-2 py-0.5 text-[9px] font-medium transition-colors ${
-        copied
-          ? 'border-emerald-300 bg-emerald-50 text-emerald-700 dark:border-emerald-700 dark:bg-emerald-950 dark:text-emerald-300'
-          : 'border-[var(--border)] text-[var(--muted-foreground)] active:bg-[var(--muted)]'
-      }`}>
-      {copied ? '\u2713 Copied' : 'Boot'}
+    <button
+      onClick={handleClick}
+      disabled={pending}
+      className="shrink-0 rounded-[5px] border px-1.5 py-0.5 text-[9px] font-semibold text-white transition-opacity active:opacity-70 disabled:opacity-50"
+      style={{ background: color, borderColor: color }}
+    >
+      {pending ? '\u2026' : label}
     </button>
   );
 }
