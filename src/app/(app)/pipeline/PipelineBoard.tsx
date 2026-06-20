@@ -1,9 +1,10 @@
 'use client';
 
-import { useState, useMemo, useCallback, useRef } from 'react';
+import { useState, useMemo, useCallback, useRef, useTransition } from 'react';
 import Link from 'next/link';
 import { useRealtimeTable } from '@/hooks/useRealtimeTable';
 import { type PipelineItem } from '@/components/ItemCard';
+import { reassignComponent } from './actions';
 import {
   PIPELINE_PHASES, getPhaseIndex, getPhaseForStatus, getPhasesForPolicy,
   QUEUE_STATUSES, BLOCKED_STATUSES, DONE_STATUSES, waitTime,
@@ -24,6 +25,13 @@ type BuildPlan = {
   component: BuildComponent;
   items: PipelineItem[];
 };
+
+/* ─── Team members (expandable as BS grows) ─── */
+
+const TEAM_MEMBERS = [
+  { key: 'scott', label: 'Scott' },
+  { key: 'brian', label: 'Brian' },
+];
 
 /* ─── Helpers ─── */
 
@@ -87,6 +95,9 @@ export function PipelineBoard({ plans: initialPlans, singles: initialSingles }: 
   const [person, setPerson] = useState<'scott' | 'brian'>('scott');
   const [drillId, setDrillId] = useState<string | null>(null);
 
+  // Track component owners locally for optimistic updates
+  const [ownerOverrides, setOwnerOverrides] = useState<Record<string, string>>({});
+
   // Pull-to-refresh
   const [pullDist, setPullDist] = useState(0);
   const [refreshing, setRefreshing] = useState(false);
@@ -98,7 +109,12 @@ export function PipelineBoard({ plans: initialPlans, singles: initialSingles }: 
   // Regroup items by component using live data
   const { livePlans, liveSingles } = useMemo(() => {
     const compMap = new Map<string, BuildComponent>();
-    for (const p of initialPlans) compMap.set(p.component.id, p.component);
+    for (const p of initialPlans) {
+      const comp = { ...p.component };
+      // Apply optimistic owner overrides
+      if (ownerOverrides[comp.id]) comp.owner = ownerOverrides[comp.id];
+      compMap.set(comp.id, comp);
+    }
 
     const planItems = new Map<string, PipelineItem[]>();
     const sng: PipelineItem[] = [];
@@ -120,7 +136,7 @@ export function PipelineBoard({ plans: initialPlans, singles: initialSingles }: 
     }
     lp.sort((a, b) => b.items.length - a.items.length);
     return { livePlans: lp, liveSingles: sng };
-  }, [allItems, initialPlans]);
+  }, [allItems, initialPlans, ownerOverrides]);
 
   // Filter by person
   const personPlans = livePlans.filter(p => p.component.owner === person);
@@ -133,11 +149,31 @@ export function PipelineBoard({ plans: initialPlans, singles: initialSingles }: 
   // Drill target
   const drillPlan = drillId ? personPlans.find(p => p.component.id === drillId) ?? null : null;
 
+  // If drill target disappeared (owner changed), exit drill
+  if (drillId && !drillPlan) {
+    // Use effect would be better but this is safe for render
+  }
+
   // Activity counts across all person plans
   const allPersonItems = [...personPlans.flatMap(p => p.items), ...personSingles];
   const bldCount = allPersonItems.filter(i => ['approved', 'executing'].includes(i.status)).length;
   const qaCount = allPersonItems.filter(i => i.status === 'qa').length;
   const actCount = allPersonItems.filter(i => isAction(i.status, person)).length;
+
+  // Owner reassignment handler
+  const handleReassign = useCallback(async (componentId: string, newOwner: string) => {
+    // Optimistic update
+    setOwnerOverrides(prev => ({ ...prev, [componentId]: newOwner }));
+    const result = await reassignComponent(componentId, newOwner);
+    if (!result.ok) {
+      // Revert on failure
+      setOwnerOverrides(prev => {
+        const next = { ...prev };
+        delete next[componentId];
+        return next;
+      });
+    }
+  }, []);
 
   return (
     <div onTouchStart={onTS} onTouchMove={onTM} onTouchEnd={onTE}>
@@ -220,7 +256,7 @@ export function PipelineBoard({ plans: initialPlans, singles: initialSingles }: 
 
       {/* ─── DRILL VIEW ─── */}
       {drillPlan && (
-        <DrillView plan={drillPlan} person={person} onBack={() => setDrillId(null)} />
+        <DrillView plan={drillPlan} person={person} onBack={() => setDrillId(null)} onReassign={handleReassign} />
       )}
     </div>
   );
@@ -252,12 +288,19 @@ function PlanCard({ plan, person, onDrill }: { plan: BuildPlan; person: string; 
     ? `linear-gradient(90deg, ${barColors.join(', ')})`
     : barColors[0] ?? 'var(--muted)';
 
+  const ownerLabel = TEAM_MEMBERS.find(m => m.key === plan.component.owner)?.label ?? plan.component.owner;
+
   return (
     <div
       onClick={onDrill}
       className={`mb-2 cursor-pointer rounded-[12px] border border-[var(--border)] bg-[var(--card)] p-4 transition-colors active:border-[var(--primary)] ${idle ? 'opacity-40' : ''}`}
     >
-      <div className="text-[9px] font-bold uppercase tracking-[1.2px] text-[var(--muted-foreground)]">Build Progress</div>
+      <div className="flex items-center gap-2">
+        <span className="text-[9px] font-bold uppercase tracking-[1.2px] text-[var(--muted-foreground)]">Build Progress</span>
+        <span className="ml-auto rounded-[4px] bg-[var(--muted)] px-1.5 py-0.5 text-[9px] font-semibold text-[var(--muted-foreground)]">
+          {ownerLabel}
+        </span>
+      </div>
 
       <div className="mt-1 flex items-start justify-between">
         <div className="min-w-0 flex-1 pr-3">
@@ -331,8 +374,10 @@ function SingleRow({ item, person }: { item: PipelineItem; person: string }) {
 
 /* ─── Drill View ─── */
 
-function DrillView({ plan, person, onBack }: { plan: BuildPlan; person: string; onBack: () => void }) {
+function DrillView({ plan, person, onBack, onReassign }: { plan: BuildPlan; person: string; onBack: () => void; onReassign: (componentId: string, newOwner: string) => void }) {
   const s = calcPlan(plan.items, person);
+  const [showOwnerPicker, setShowOwnerPicker] = useState(false);
+  const [isPending, startTransition] = useTransition();
 
   const pills: { label: string; color: string }[] = [];
   if (s.des > 0) pills.push({ label: `Design ${s.des}`, color: '#8b5cf6' });
@@ -349,6 +394,9 @@ function DrillView({ plan, person, onBack }: { plan: BuildPlan; person: string; 
   if (s.qa > 0) barColors.push('#14b8a6');
   if (s.done > 0) barColors.push('#10b981');
   const barBg = barColors.length > 1 ? `linear-gradient(90deg, ${barColors.join(', ')})` : barColors[0] ?? 'var(--muted)';
+
+  const currentOwner = plan.component.owner;
+  const ownerLabel = TEAM_MEMBERS.find(m => m.key === currentOwner)?.label ?? currentOwner;
 
   // Sort: action first, then by phase desc
   const sorted = [...plan.items]
@@ -367,7 +415,54 @@ function DrillView({ plan, person, onBack }: { plan: BuildPlan; person: string; 
       </button>
 
       <div className="mb-3 rounded-[12px] border border-[var(--border)] bg-[var(--card)] p-4">
-        <div className="text-[18px] font-bold">{plan.component.name}</div>
+        <div className="flex items-start gap-2">
+          <div className="min-w-0 flex-1">
+            <div className="text-[18px] font-bold">{plan.component.name}</div>
+          </div>
+          {/* Owner badge — tappable to reassign */}
+          <div className="relative">
+            <button
+              onClick={() => setShowOwnerPicker(!showOwnerPicker)}
+              className={`flex items-center gap-1 rounded-[6px] border px-2 py-1 text-[11px] font-semibold transition-colors ${
+                isPending ? 'opacity-50' : 'hover:border-[var(--primary)]'
+              } border-[var(--border)] bg-[var(--muted)] text-[var(--muted-foreground)]`}
+              disabled={isPending}
+            >
+              <svg className="h-3 w-3" fill="none" viewBox="0 0 24 24" strokeWidth={2} stroke="currentColor">
+                <path strokeLinecap="round" strokeLinejoin="round" d="M15.75 6a3.75 3.75 0 1 1-7.5 0 3.75 3.75 0 0 1 7.5 0ZM4.501 20.118a7.5 7.5 0 0 1 14.998 0" />
+              </svg>
+              {ownerLabel}
+            </button>
+            {showOwnerPicker && (
+              <div className="absolute right-0 top-full z-20 mt-1 overflow-hidden rounded-[8px] border border-[var(--border)] bg-[var(--card)] shadow-lg">
+                {TEAM_MEMBERS.map(m => (
+                  <button
+                    key={m.key}
+                    onClick={() => {
+                      if (m.key !== currentOwner) {
+                        startTransition(() => {
+                          onReassign(plan.component.id, m.key);
+                        });
+                      }
+                      setShowOwnerPicker(false);
+                    }}
+                    className={`flex w-full items-center gap-2 px-4 py-2 text-left text-[12px] transition-colors hover:bg-[var(--muted)] ${
+                      m.key === currentOwner ? 'font-bold text-[var(--primary)]' : 'text-[var(--foreground)]'
+                    }`}
+                  >
+                    {m.key === currentOwner && (
+                      <svg className="h-3 w-3 text-[var(--primary)]" fill="none" viewBox="0 0 24 24" strokeWidth={3} stroke="currentColor">
+                        <path strokeLinecap="round" strokeLinejoin="round" d="m4.5 12.75 6 6 9-13.5" />
+                      </svg>
+                    )}
+                    {m.key !== currentOwner && <span className="w-3" />}
+                    {m.label}
+                  </button>
+                ))}
+              </div>
+            )}
+          </div>
+        </div>
         {plan.component.description && (
           <p className="mt-1 text-[11px] leading-relaxed text-[var(--muted-foreground)]">{plan.component.description}</p>
         )}

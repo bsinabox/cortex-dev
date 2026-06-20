@@ -204,3 +204,37 @@ export async function retryJob(jobId: string): Promise<ActionResult> {
   revalidatePath('/pipeline');
   return { ok: true };
 }
+
+/* ─── Component ownership reassignment ─── */
+
+export async function reassignComponent(
+  componentId: string,
+  newOwner: string
+): Promise<ActionResult> {
+  const user = await getAuthUser();
+  if (!user) return { ok: false, error: 'Not authenticated' };
+
+  const role = getUserRole(user.id);
+  if (!role) return { ok: false, error: 'Unauthorized' };
+
+  // Any authenticated user can reassign — supports Scott↔Brian and future users
+  const supabase = await createServiceClient();
+
+  const { data: updated, error: updateErr } = await supabase
+    .from('build_components')
+    .update({
+      owner: newOwner,
+      updated_at: new Date().toISOString(),
+    } as Record<string, unknown>)
+    .eq('id', componentId)
+    .select('id, component_code, owner');
+
+  if (updateErr) return { ok: false, error: updateErr.message };
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  if (!updated || (updated as any[]).length === 0) {
+    return { ok: false, error: 'Component not found or update rejected' };
+  }
+
+  revalidatePath('/pipeline');
+  return { ok: true };
+}
