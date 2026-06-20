@@ -281,6 +281,13 @@ export function PipelineBoard({ initialItems }: PipelineBoardProps) {
         )}
       </div>
 
+      {/* Pipeline Activity bar — always visible */}
+      <PipelineActivityBar
+        items={filtered}
+        actionCount={actionItems.length}
+        personFilter={personFilter}
+      />
+
       {/* ─── Status Board rows ─── */}
       <div className="space-y-0.5">
 
@@ -308,11 +315,10 @@ export function PipelineBoard({ initialItems }: PipelineBoardProps) {
           </>
         )}
 
-        {/* AUTONOMOUS — with scorecard */}
+        {/* AUTONOMOUS */}
         {autonomousItems.length > 0 && (
           <>
             <SectionLabel label="Autonomous" count={autonomousItems.length} accent="#1E40AF" />
-            <AutonomousScorecard items={autonomousItems} />
             {autonomousItems.map((item) => (
               <BoardRow key={item.id} item={item} showRound />
             ))}
@@ -381,56 +387,76 @@ function SectionLabel({ label, count, accent }: { label: string; count: number; 
   );
 }
 
-/* ─── Autonomous scorecard — sub-status + round breakdown ─── */
+/* ─── Pipeline Activity bar — always visible ─── */
 
-function AutonomousScorecard({ items }: { items: PipelineItem[] }) {
-  const approved = items.filter(i => i.status === 'approved').length;
-  const executing = items.filter(i => i.status === 'executing').length;
-  const qa = items.filter(i => i.status === 'qa').length;
+function PipelineActivityBar({ items, actionCount, personFilter }: {
+  items: PipelineItem[];
+  actionCount: number;
+  personFilter: 'scott' | 'brian' | 'all';
+}) {
+  const building = items.filter(i => i.status === 'executing').length;
+  const queued = items.filter(i => i.status === 'approved').length;
+  const qaCount = items.filter(i => i.status === 'qa').length;
+  const inFlight = building + queued + qaCount;
 
-  // Round distribution
+  // Round distribution for autonomous items
+  const autoItems = items.filter(i => ['approved', 'executing', 'qa'].includes(i.status));
   const rounds: Record<number, number> = {};
-  for (const item of items) {
+  for (const item of autoItems) {
     const r = item.current_round ?? 0;
     rounds[r] = (rounds[r] || 0) + 1;
   }
   const roundKeys = Object.keys(rounds).map(Number).sort((a, b) => a - b);
 
+  const isActive = inFlight > 0;
+  const waitLabel = personFilter === 'scott' ? 'waiting on you'
+    : personFilter === 'brian' ? 'waiting on Brian' : 'need action';
+
   return (
-    <div className="mb-0.5 flex flex-wrap items-center gap-x-3 gap-y-1 rounded-[8px] border border-blue-200 bg-blue-50 px-2.5 py-1.5 dark:border-blue-800 dark:bg-blue-950/30">
-      {/* Sub-status pills */}
-      <div className="flex items-center gap-2 text-[10px]">
-        {approved > 0 && (
-          <span className="flex items-center gap-1">
-            <span className="inline-block h-2 w-2 rounded-full bg-blue-400" />
-            <span className="text-blue-700 dark:text-blue-300">{approved} queued</span>
-          </span>
-        )}
-        {executing > 0 && (
-          <span className="flex items-center gap-1">
-            <span className="inline-block h-2 w-2 rounded-full bg-emerald-400 animate-pulse" />
-            <span className="text-emerald-700 dark:text-emerald-300">{executing} building</span>
-          </span>
-        )}
-        {qa > 0 && (
-          <span className="flex items-center gap-1">
-            <span className="inline-block h-2 w-2 rounded-full bg-teal-400" />
-            <span className="text-teal-700 dark:text-teal-300">{qa} QA</span>
-          </span>
+    <div className={`mb-3 flex items-center gap-2 rounded-[8px] border px-2.5 py-1.5 text-[10px] ${
+      isActive
+        ? 'border-blue-200 bg-blue-50 dark:border-blue-800 dark:bg-blue-950/30'
+        : 'border-[var(--border)] bg-[var(--card)]'
+    }`}>
+      {/* Activity indicator */}
+      <span className={`inline-block h-2 w-2 shrink-0 rounded-full ${
+        isActive
+          ? 'bg-emerald-400 animate-pulse'
+          : 'bg-[var(--muted-foreground)] opacity-40'
+      }`} />
+
+      {/* Status text */}
+      <div className="flex flex-wrap items-center gap-x-2 gap-y-0.5">
+        {isActive ? (
+          <>
+            {building > 0 && <span className="font-semibold text-emerald-700 dark:text-emerald-300">{building} building</span>}
+            {qaCount > 0 && <span className="font-semibold text-teal-700 dark:text-teal-300">{qaCount} QA</span>}
+            {queued > 0 && <span className="text-blue-600 dark:text-blue-300">{queued} queued</span>}
+            {roundKeys.length > 0 && (
+              <span className="flex items-center gap-1">
+                {roundKeys.map(r => (
+                  <span key={r} className={`rounded-[3px] px-1 py-0.5 text-[9px] ${
+                    r >= 3 ? 'bg-red-100 text-red-600 dark:bg-red-900 dark:text-red-300'
+                      : r >= 2 ? 'bg-amber-100 text-amber-600 dark:bg-amber-900 dark:text-amber-300'
+                      : 'bg-[var(--muted)] text-[var(--muted-foreground)]'
+                  }`}>
+                    R{r}:{rounds[r]}
+                  </span>
+                ))}
+              </span>
+            )}
+          </>
+        ) : (
+          <span className="text-[var(--muted-foreground)]">Pipeline idle</span>
         )}
       </div>
-      {/* Round distribution */}
-      <div className="flex items-center gap-1.5 text-[9px] text-[var(--muted-foreground)]">
-        {roundKeys.map(r => (
-          <span key={r} className={`rounded-[3px] px-1 py-0.5 ${
-            r >= 3 ? 'bg-red-100 text-red-600 dark:bg-red-900 dark:text-red-300'
-              : r >= 2 ? 'bg-amber-100 text-amber-600 dark:bg-amber-900 dark:text-amber-300'
-              : 'bg-[var(--muted)]'
-          }`}>
-            R{r}:{rounds[r]}
-          </span>
-        ))}
-      </div>
+
+      {/* Action count on the right */}
+      {actionCount > 0 && (
+        <span className="ml-auto shrink-0 font-semibold text-red-500">
+          {actionCount} {waitLabel}
+        </span>
+      )}
     </div>
   );
 }
