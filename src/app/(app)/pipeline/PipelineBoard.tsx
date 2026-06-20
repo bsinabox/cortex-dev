@@ -308,12 +308,13 @@ export function PipelineBoard({ initialItems }: PipelineBoardProps) {
           </>
         )}
 
-        {/* AUTONOMOUS */}
+        {/* AUTONOMOUS — with scorecard */}
         {autonomousItems.length > 0 && (
           <>
             <SectionLabel label="Autonomous" count={autonomousItems.length} accent="#1E40AF" />
+            <AutonomousScorecard items={autonomousItems} />
             {autonomousItems.map((item) => (
-              <BoardRow key={item.id} item={item} />
+              <BoardRow key={item.id} item={item} showRound />
             ))}
           </>
         )}
@@ -380,15 +381,70 @@ function SectionLabel({ label, count, accent }: { label: string; count: number; 
   );
 }
 
+/* ─── Autonomous scorecard — sub-status + round breakdown ─── */
+
+function AutonomousScorecard({ items }: { items: PipelineItem[] }) {
+  const approved = items.filter(i => i.status === 'approved').length;
+  const executing = items.filter(i => i.status === 'executing').length;
+  const qa = items.filter(i => i.status === 'qa').length;
+
+  // Round distribution
+  const rounds: Record<number, number> = {};
+  for (const item of items) {
+    const r = item.current_round ?? 0;
+    rounds[r] = (rounds[r] || 0) + 1;
+  }
+  const roundKeys = Object.keys(rounds).map(Number).sort((a, b) => a - b);
+
+  return (
+    <div className="mb-0.5 flex flex-wrap items-center gap-x-3 gap-y-1 rounded-[8px] border border-blue-200 bg-blue-50 px-2.5 py-1.5 dark:border-blue-800 dark:bg-blue-950/30">
+      {/* Sub-status pills */}
+      <div className="flex items-center gap-2 text-[10px]">
+        {approved > 0 && (
+          <span className="flex items-center gap-1">
+            <span className="inline-block h-2 w-2 rounded-full bg-blue-400" />
+            <span className="text-blue-700 dark:text-blue-300">{approved} queued</span>
+          </span>
+        )}
+        {executing > 0 && (
+          <span className="flex items-center gap-1">
+            <span className="inline-block h-2 w-2 rounded-full bg-emerald-400 animate-pulse" />
+            <span className="text-emerald-700 dark:text-emerald-300">{executing} building</span>
+          </span>
+        )}
+        {qa > 0 && (
+          <span className="flex items-center gap-1">
+            <span className="inline-block h-2 w-2 rounded-full bg-teal-400" />
+            <span className="text-teal-700 dark:text-teal-300">{qa} QA</span>
+          </span>
+        )}
+      </div>
+      {/* Round distribution */}
+      <div className="flex items-center gap-1.5 text-[9px] text-[var(--muted-foreground)]">
+        {roundKeys.map(r => (
+          <span key={r} className={`rounded-[3px] px-1 py-0.5 ${
+            r >= 3 ? 'bg-red-100 text-red-600 dark:bg-red-900 dark:text-red-300'
+              : r >= 2 ? 'bg-amber-100 text-amber-600 dark:bg-amber-900 dark:text-amber-300'
+              : 'bg-[var(--muted)]'
+          }`}>
+            R{r}:{rounds[r]}
+          </span>
+        ))}
+      </div>
+    </div>
+  );
+}
+
 /* ─── Dense board row — 2 lines per item ─── */
 
-function BoardRow({ item, isAction, dimmed }: { item: PipelineItem; isAction?: boolean; dimmed?: boolean }) {
+function BoardRow({ item, isAction, dimmed, showRound }: { item: PipelineItem; isAction?: boolean; dimmed?: boolean; showRound?: boolean }) {
   const sid = item.id.substring(0, 8).toUpperCase();
   const priority = PRIORITY_CONFIG[item.priority] ?? PRIORITY_CONFIG.p3;
   const repo = REPO_CONFIG[item.repo] ?? { label: item.repo, bg: 'var(--color-stone-100)', text: 'var(--color-stone-600)' };
   const phase = getPhaseForStatus(item.status);
   const actionLabel = isAction ? getActionLabel(item.status) : null;
   const hint = getStatusHint(item.status);
+  const round = item.current_round ?? 0;
 
   return (
     <div className={`rounded-[8px] border px-2.5 py-1.5 transition-colors ${
@@ -430,6 +486,18 @@ function BoardRow({ item, isAction, dimmed }: { item: PipelineItem; isAction?: b
           style={{ background: repo.bg, color: repo.text }}>
           {repo.label}
         </span>
+
+        {showRound && round > 0 && (
+          <span className={`rounded-[4px] px-1 py-0.5 text-[8px] font-bold ${
+            round >= 3
+              ? 'bg-red-100 text-red-700 dark:bg-red-900 dark:text-red-300'
+              : round >= 2
+                ? 'bg-amber-100 text-amber-700 dark:bg-amber-900 dark:text-amber-300'
+                : 'bg-[var(--muted)] text-[var(--muted-foreground)]'
+          }`}>
+            R{round}
+          </span>
+        )}
 
         {item.escalated_at && (
           <span className="text-[10px] text-amber-500" title={item.escalation_reason ?? 'Escalated'}>&#9888;</span>
