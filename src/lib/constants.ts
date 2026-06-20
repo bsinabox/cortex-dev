@@ -203,7 +203,8 @@ export const WORKER_STATUS_CONFIG: Record<string, { bg: string; text: string; la
   running:  { bg: '#D1FAE5', text: '#065F46', label: 'Running',  dot: '#10B981' },
   complete: { bg: '#D1FAE5', text: '#065F46', label: 'Complete', dot: '#059669' },
   failed:   { bg: '#FEE2E2', text: '#991B1B', label: 'Failed',   dot: '#EF4444' },
-  stalled:  { bg: '#FEF3C7', text: '#92400E', label: 'Stalled',  dot: '#F59E0B' },
+  stalled:    { bg: '#FEF3C7', text: '#92400E', label: 'Stalled',   dot: '#F59E0B' },
+  cancelled: { bg: '#F1F5F9', text: '#64748B', label: 'Cancelled', dot: '#94A3B8' },
 };
 
 // Worker model config

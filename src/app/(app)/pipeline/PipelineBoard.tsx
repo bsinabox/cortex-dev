@@ -33,6 +33,43 @@ const TEAM_MEMBERS = [
   { key: 'brian', label: 'Brian' },
 ];
 
+/* ─── Status badge config ─── */
+
+// Full status → badge mapping (covers ALL statuses, no more "?")
+function statusBadge(status: string): { label: string; bg: string; text: string } {
+  // Pipeline phases
+  const phase = getPhaseForStatus(status);
+  if (phase) return { label: phase.short, bg: phase.bg, text: phase.text };
+
+  // Done states
+  if (status === 'done' || status === 'subtasks_complete')
+    return { label: '✓', bg: '#D1FAE5', text: '#065F46' };
+
+  // Queue/intake states
+  if (status === 'intake' || status === 'awaiting_hub_design')
+    return { label: 'Q', bg: '#F1F5F9', text: '#475569' };
+
+  // Blocked states
+  if (BLOCKED_STATUSES.includes(status))
+    return { label: 'Blk', bg: '#FEE2E2', text: '#991B1B' };
+
+  // Terminal
+  if (status === 'cancelled') return { label: '✕', bg: '#F1F5F9', text: '#94A3B8' };
+  if (status === 'failed') return { label: '!', bg: '#FEE2E2', text: '#991B1B' };
+
+  return { label: '?', bg: '#F1F5F9', text: '#94A3B8' };
+}
+
+/* ─── Autonomous loop detection ─── */
+
+const AUTONOMOUS_STATUSES = new Set([
+  'approved', 'executing', 'qa', 'cross_review', 'designing', 'design_conflict',
+]);
+
+function isAutonomous(status: string): boolean {
+  return AUTONOMOUS_STATUSES.has(status);
+}
+
 /* ─── Helpers ─── */
 
 const SCOTT_ACTS = new Set(['testing_in_dev', 'awaiting_hub_design', 'intake', 'designing', 'cross_review', 'design_conflict']);
@@ -51,12 +88,13 @@ function calcPlan(items: PipelineItem[], person: string) {
   const blk = items.filter(i => BLOCKED_STATUSES.includes(i.status)).length;
   const done = items.filter(i => DONE_STATUSES.includes(i.status)).length;
   const acts = items.filter(i => isAction(i.status, person)).length;
+  const autoLoop = items.filter(i => isAutonomous(i.status)).length;
   const through = bld + qa + done;
   const pct = t > 0 ? Math.round((through / t) * 100) : 0;
   const minHours = items.length > 0
     ? Math.min(...items.map(i => (Date.now() - new Date(i.updated_at).getTime()) / 3600000))
     : 999;
-  return { t, bld, qa, rev, des, blk, done, acts, through, pct, minHours };
+  return { t, bld, qa, rev, des, blk, done, acts, autoLoop, through, pct, minHours };
 }
 
 function actionLabel(status: string): { text: string; bg: string } | null {
@@ -69,10 +107,12 @@ function actionLabel(status: string): { text: string; bg: string } | null {
 function statusHint(status: string): string {
   const hints: Record<string, string> = {
     human_review: 'Approve or request changes', testing_in_dev: 'Verify on dev then promote',
-    design_review_hold: 'Review QA findings', approved: 'Queued for worker',
-    executing: 'Building...', qa: 'Running QA', cross_review: 'Codex reviewing',
-    designing: 'Design in progress', readiness_blocked: 'Waiting on dependencies',
-    blocked: 'Needs intervention', awaiting_hub_design: 'Needs design session',
+    design_review_hold: 'Review QA findings', approved: 'Queued for worker — autonomous',
+    executing: 'Building right now — autonomous', qa: 'Running QA checks — autonomous',
+    cross_review: 'Codex reviewing — autonomous', designing: 'Design in progress — autonomous',
+    readiness_blocked: 'Waiting on dependencies', blocked: 'Needs intervention',
+    awaiting_hub_design: 'Needs design session', done: 'Completed — no action needed',
+    cancelled: 'Cancelled — no action needed',
   };
   return hints[status] ?? status;
 }
@@ -111,7 +151,6 @@ export function PipelineBoard({ plans: initialPlans, singles: initialSingles }: 
     const compMap = new Map<string, BuildComponent>();
     for (const p of initialPlans) {
       const comp = { ...p.component };
-      // Apply optimistic owner overrides
       if (ownerOverrides[comp.id]) comp.owner = ownerOverrides[comp.id];
       compMap.set(comp.id, comp);
     }
@@ -149,11 +188,6 @@ export function PipelineBoard({ plans: initialPlans, singles: initialSingles }: 
   // Drill target
   const drillPlan = drillId ? personPlans.find(p => p.component.id === drillId) ?? null : null;
 
-  // If drill target disappeared (owner changed), exit drill
-  if (drillId && !drillPlan) {
-    // Use effect would be better but this is safe for render
-  }
-
   // Activity counts across all person plans
   const allPersonItems = [...personPlans.flatMap(p => p.items), ...personSingles];
   const bldCount = allPersonItems.filter(i => ['approved', 'executing'].includes(i.status)).length;
@@ -162,11 +196,9 @@ export function PipelineBoard({ plans: initialPlans, singles: initialSingles }: 
 
   // Owner reassignment handler
   const handleReassign = useCallback(async (componentId: string, newOwner: string) => {
-    // Optimistic update
     setOwnerOverrides(prev => ({ ...prev, [componentId]: newOwner }));
     const result = await reassignComponent(componentId, newOwner);
     if (!result.ok) {
-      // Revert on failure
       setOwnerOverrides(prev => {
         const next = { ...prev };
         delete next[componentId];
@@ -229,7 +261,6 @@ export function PipelineBoard({ plans: initialPlans, singles: initialSingles }: 
       {/* ─── GRID VIEW ─── */}
       {!drillPlan && (
         <div>
-          {/* Build plan cards */}
           {personPlans.map(plan => (
             <PlanCard key={plan.component.id} plan={plan} person={person} onDrill={() => setDrillId(plan.component.id)} />
           ))}
@@ -240,7 +271,6 @@ export function PipelineBoard({ plans: initialPlans, singles: initialSingles }: 
             </div>
           )}
 
-          {/* Individual items */}
           {personSingles.length > 0 && (
             <>
               <div className="px-1 pb-1 pt-3 text-[9px] font-bold uppercase tracking-widest text-[var(--muted-foreground)]">
@@ -262,7 +292,7 @@ export function PipelineBoard({ plans: initialPlans, singles: initialSingles }: 
   );
 }
 
-/* ─── Build Plan Card (Mission Control style) ─── */
+/* ─── Build Plan Card ─── */
 
 function PlanCard({ plan, person, onDrill }: { plan: BuildPlan; person: string; onDrill: () => void }) {
   const s = calcPlan(plan.items, person);
@@ -283,7 +313,6 @@ function PlanCard({ plan, person, onDrill }: { plan: BuildPlan; person: string; 
   if (s.bld > 0) barColors.push('#3b82f6');
   if (s.qa > 0) barColors.push('#14b8a6');
   if (s.done > 0) barColors.push('#10b981');
-
   const barBg = barColors.length > 1
     ? `linear-gradient(90deg, ${barColors.join(', ')})`
     : barColors[0] ?? 'var(--muted)';
@@ -335,11 +364,22 @@ function PlanCard({ plan, person, onDrill }: { plan: BuildPlan; person: string; 
         Last activity: {waitTime(new Date(Date.now() - s.minHours * 3600000).toISOString())} ago
       </div>
 
+      {/* Action needed callout */}
       {s.acts > 0 && (
         <div className="mt-1.5 flex items-center gap-2 rounded-[6px] border border-red-200 bg-red-50 px-2 py-1.5 dark:border-red-900 dark:bg-red-950/30">
           <span className="text-[14px] font-extrabold text-red-500">{s.acts}</span>
           <span className="text-[10px] text-red-400">
             item{s.acts > 1 ? 's' : ''} waiting on {person === 'scott' ? 'you' : 'Brian'}
+          </span>
+        </div>
+      )}
+
+      {/* Autonomous loop callout */}
+      {s.autoLoop > 0 && s.acts === 0 && (
+        <div className="mt-1.5 flex items-center gap-2 rounded-[6px] border border-blue-200 bg-blue-50 px-2 py-1.5 dark:border-blue-800 dark:bg-blue-950/30">
+          <span className="inline-block h-2 w-2 animate-pulse rounded-full bg-blue-500" />
+          <span className="text-[10px] text-blue-600 dark:text-blue-300">
+            {s.autoLoop} item{s.autoLoop > 1 ? 's' : ''} in autonomous loop — hands off
           </span>
         </div>
       )}
@@ -352,8 +392,7 @@ function PlanCard({ plan, person, onDrill }: { plan: BuildPlan; person: string; 
 function SingleRow({ item, person }: { item: PipelineItem; person: string }) {
   const act = isAction(item.status, person);
   const sid = item.id.substring(0, 8).toUpperCase();
-  const phase = getPhaseForStatus(item.status);
-  const phLabel = phase?.short ?? (QUEUE_STATUSES.includes(item.status) ? 'Q' : BLOCKED_STATUSES.includes(item.status) ? 'Blk' : '?');
+  const badge = statusBadge(item.status);
   const al = act ? actionLabel(item.status) : null;
 
   return (
@@ -362,7 +401,7 @@ function SingleRow({ item, person }: { item: PipelineItem; person: string }) {
         act ? 'border-red-200 bg-red-50 dark:border-red-900 dark:bg-red-950/40' : 'border-[var(--border)] bg-[var(--card)]'
       }`}>
       <span className="font-mono text-[11px] font-bold text-[var(--primary)]">{sid}</span>
-      <span className="rounded-[4px] px-1 py-0.5 text-[8px] font-bold" style={{ background: phase?.bg ?? 'var(--muted)', color: phase?.text ?? 'var(--muted-foreground)' }}>{phLabel}</span>
+      <span className="rounded-[4px] px-1 py-0.5 text-[8px] font-bold" style={{ background: badge.bg, color: badge.text }}>{badge.label}</span>
       <span className="min-w-0 flex-1 truncate text-[11px]">{item.title}</span>
       <span className="text-[9px] text-[var(--muted-foreground)]">{waitTime(item.updated_at)}</span>
       {al && (
@@ -398,15 +437,19 @@ function DrillView({ plan, person, onBack, onReassign }: { plan: BuildPlan; pers
   const currentOwner = plan.component.owner;
   const ownerLabel = TEAM_MEMBERS.find(m => m.key === currentOwner)?.label ?? currentOwner;
 
-  // Sort: action first, then by phase desc
-  const sorted = [...plan.items]
-    .filter(i => !['cancelled', 'failed'].includes(i.status))
-    .sort((a, b) => {
-      const aA = isAction(a.status, person) ? 0 : 1;
-      const bA = isAction(b.status, person) ? 0 : 1;
-      if (aA !== bA) return aA - bA;
-      return getPhaseIndex(b.status) - getPhaseIndex(a.status);
-    });
+  // Group items by category
+  const activeItems = plan.items.filter(i => !['cancelled', 'failed'].includes(i.status));
+
+  const actionItems = activeItems.filter(i => isAction(i.status, person));
+  const autoItems = activeItems.filter(i => isAutonomous(i.status));
+  const doneItems = activeItems.filter(i => DONE_STATUSES.includes(i.status));
+  const blockedItems = activeItems.filter(i => BLOCKED_STATUSES.includes(i.status));
+  const queueItems = activeItems.filter(i => QUEUE_STATUSES.includes(i.status) && !isAction(i.status, person));
+  const otherItems = activeItems.filter(i =>
+    !isAction(i.status, person) && !isAutonomous(i.status) &&
+    !DONE_STATUSES.includes(i.status) && !BLOCKED_STATUSES.includes(i.status) &&
+    !QUEUE_STATUSES.includes(i.status)
+  );
 
   return (
     <div>
@@ -440,9 +483,7 @@ function DrillView({ plan, person, onBack, onReassign }: { plan: BuildPlan; pers
                     key={m.key}
                     onClick={() => {
                       if (m.key !== currentOwner) {
-                        startTransition(() => {
-                          onReassign(plan.component.id, m.key);
-                        });
+                        startTransition(() => { onReassign(plan.component.id, m.key); });
                       }
                       setShowOwnerPicker(false);
                     }}
@@ -483,7 +524,98 @@ function DrillView({ plan, person, onBack, onReassign }: { plan: BuildPlan; pers
         </div>
       </div>
 
-      {sorted.map(item => (
+      {/* ── ACTION NEEDED ── */}
+      {actionItems.length > 0 && (
+        <ItemSection
+          label={`Action Needed (${actionItems.length})`}
+          color="#EF4444"
+          items={actionItems}
+          person={person}
+        />
+      )}
+
+      {/* ── AUTONOMOUS LOOP ── */}
+      {autoItems.length > 0 && (
+        <ItemSection
+          label={`Autonomous Loop (${autoItems.length})`}
+          color="#3B82F6"
+          pulse
+          items={autoItems}
+          person={person}
+          subtitle="Hands off — conductor is working"
+        />
+      )}
+
+      {/* ── QUEUED ── */}
+      {queueItems.length > 0 && (
+        <ItemSection
+          label={`Queued (${queueItems.length})`}
+          color="#94A3B8"
+          items={queueItems}
+          person={person}
+        />
+      )}
+
+      {/* ── BLOCKED ── */}
+      {blockedItems.length > 0 && (
+        <ItemSection
+          label={`Blocked (${blockedItems.length})`}
+          color="#EF4444"
+          items={blockedItems}
+          person={person}
+        />
+      )}
+
+      {/* ── OTHER ── */}
+      {otherItems.length > 0 && (
+        <ItemSection
+          label={`Other (${otherItems.length})`}
+          color="#94A3B8"
+          items={otherItems}
+          person={person}
+        />
+      )}
+
+      {/* ── DONE ── */}
+      {doneItems.length > 0 && (
+        <ItemSection
+          label={`Done (${doneItems.length})`}
+          color="#10B981"
+          items={doneItems}
+          person={person}
+          collapsed
+        />
+      )}
+    </div>
+  );
+}
+
+/* ─── Item Section (collapsible group in drill view) ─── */
+
+function ItemSection({ label, color, pulse, items, person, subtitle, collapsed: defaultCollapsed }: {
+  label: string; color: string; pulse?: boolean;
+  items: PipelineItem[]; person: string;
+  subtitle?: string; collapsed?: boolean;
+}) {
+  const [collapsed, setCollapsed] = useState(defaultCollapsed ?? false);
+
+  return (
+    <div className="mb-2">
+      <button
+        onClick={() => setCollapsed(!collapsed)}
+        className="mb-0.5 flex w-full items-center gap-1.5 px-1 py-1 text-left"
+      >
+        <span
+          className={`inline-block h-2 w-2 shrink-0 rounded-full ${pulse ? 'animate-pulse' : ''}`}
+          style={{ background: color }}
+        />
+        <span className="text-[10px] font-bold uppercase tracking-widest" style={{ color }}>{label}</span>
+        {subtitle && <span className="ml-1 text-[9px] text-[var(--muted-foreground)]">— {subtitle}</span>}
+        <svg className={`ml-auto h-3 w-3 text-[var(--muted-foreground)] transition-transform ${collapsed ? '' : 'rotate-90'}`} fill="none" viewBox="0 0 24 24" strokeWidth={2} stroke="currentColor">
+          <path strokeLinecap="round" strokeLinejoin="round" d="m8.25 4.5 7.5 7.5-7.5 7.5" />
+        </svg>
+      </button>
+      {!collapsed && items.map(item => (
         <DrillItem key={item.id} item={item} person={person} />
       ))}
     </div>
@@ -495,9 +627,9 @@ function DrillView({ plan, person, onBack, onReassign }: { plan: BuildPlan; pers
 function DrillItem({ item, person }: { item: PipelineItem; person: string }) {
   const [expanded, setExpanded] = useState(false);
   const act = isAction(item.status, person);
+  const auto = isAutonomous(item.status);
   const sid = item.id.substring(0, 8).toUpperCase();
-  const phase = getPhaseForStatus(item.status);
-  const phLabel = phase?.short ?? (QUEUE_STATUSES.includes(item.status) ? 'Q' : BLOCKED_STATUSES.includes(item.status) ? 'Blk' : '?');
+  const badge = statusBadge(item.status);
   const al = act ? actionLabel(item.status) : null;
   const round = item.current_round ?? 0;
 
@@ -506,13 +638,19 @@ function DrillItem({ item, person }: { item: PipelineItem; person: string }) {
   const currentIdx = getPhaseIndex(item.status);
   const isBlocked = BLOCKED_STATUSES.includes(item.status);
   const isQueue = QUEUE_STATUSES.includes(item.status);
+  const isDone = DONE_STATUSES.includes(item.status);
 
   return (
-    <div className={`mb-1 overflow-hidden rounded-[8px] border ${act ? 'border-red-200 dark:border-red-900 bg-red-50 dark:bg-red-950/40' : 'border-[var(--border)] bg-[var(--card)]'}`}>
+    <div className={`mb-1 overflow-hidden rounded-[8px] border ${
+      act ? 'border-red-200 dark:border-red-900 bg-red-50 dark:bg-red-950/40'
+        : auto ? 'border-blue-200 dark:border-blue-900 bg-blue-50/50 dark:bg-blue-950/20'
+        : isDone ? 'border-emerald-200 dark:border-emerald-900 bg-emerald-50/30 dark:bg-emerald-950/10 opacity-60'
+        : 'border-[var(--border)] bg-[var(--card)]'
+    }`}>
       <div className="flex cursor-pointer items-center gap-1.5 px-2.5 py-2 active:bg-[var(--muted)]" onClick={() => setExpanded(!expanded)}>
         <Link href={`/pipeline/${item.id}`} onClick={e => e.stopPropagation()}
           className="font-mono text-[11px] font-bold text-[var(--primary)]">{sid}</Link>
-        <span className="rounded-[4px] px-1 py-0.5 text-[8px] font-bold" style={{ background: phase?.bg ?? 'var(--muted)', color: phase?.text ?? 'var(--muted-foreground)' }}>{phLabel}</span>
+        <span className="rounded-[4px] px-1 py-0.5 text-[8px] font-bold" style={{ background: badge.bg, color: badge.text }}>{badge.label}</span>
         {round > 0 && (
           <span className={`rounded-[3px] px-1 py-0.5 text-[8px] font-bold ${round >= 3 ? 'bg-red-100 text-red-700 dark:bg-red-900 dark:text-red-300' : round >= 2 ? 'bg-amber-100 text-amber-700 dark:bg-amber-900 dark:text-amber-300' : 'bg-[var(--muted)] text-[var(--muted-foreground)]'}`}>
             R{round}
@@ -522,6 +660,9 @@ function DrillItem({ item, person }: { item: PipelineItem; person: string }) {
         <span className="text-[9px] text-[var(--muted-foreground)]">{waitTime(item.updated_at)}</span>
         {al && (
           <span className="rounded-[5px] px-2 py-0.5 text-[9px] font-bold text-white" style={{ background: al.bg }}>{al.text}</span>
+        )}
+        {auto && !al && (
+          <span className="inline-block h-1.5 w-1.5 animate-pulse rounded-full bg-blue-500" />
         )}
       </div>
 
@@ -533,15 +674,17 @@ function DrillItem({ item, person }: { item: PipelineItem; person: string }) {
             {phases.map((ph) => {
               const gIdx = PIPELINE_PHASES.findIndex(p => p.key === ph.key);
               let color = 'var(--muted)';
-              if (!isBlocked && !isQueue) {
+              if (isDone) {
+                color = ph.dot; // all filled for done items
+              } else if (!isBlocked && !isQueue) {
                 if (gIdx < currentIdx) color = ph.dot;
                 else if (gIdx === currentIdx) color = ph.dot;
               }
               return (
                 <div key={ph.key} className="h-[5px] flex-1 rounded-full" style={{
                   background: color,
-                  opacity: gIdx === currentIdx ? 1 : gIdx < currentIdx ? 0.8 : 0.2,
-                  animation: gIdx === currentIdx && !isBlocked && !isQueue ? 'pulse 2s ease-in-out infinite' : undefined,
+                  opacity: isDone ? 0.7 : gIdx === currentIdx ? 1 : gIdx < currentIdx ? 0.8 : 0.2,
+                  animation: gIdx === currentIdx && !isBlocked && !isQueue && !isDone ? 'pulse 2s ease-in-out infinite' : undefined,
                 }} />
               );
             })}
@@ -549,6 +692,7 @@ function DrillItem({ item, person }: { item: PipelineItem; person: string }) {
           <div className="mt-1 flex justify-between text-[7px] text-[var(--muted-foreground)]">
             {phases.map((ph) => {
               const gIdx = PIPELINE_PHASES.findIndex(p => p.key === ph.key);
+              if (isDone) return <span key={ph.key} className="text-emerald-500">{'\u2713'}{ph.short}</span>;
               if (gIdx < currentIdx) return <span key={ph.key} className="text-emerald-500">{'\u2713'}{ph.short}</span>;
               if (gIdx === currentIdx) return <span key={ph.key} className="font-bold" style={{ color: ph.dot }}>{ph.short}</span>;
               return <span key={ph.key}>{ph.short}</span>;
