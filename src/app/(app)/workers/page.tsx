@@ -7,11 +7,15 @@ export const dynamic = 'force-dynamic';
 export default async function WorkersPage() {
   const supabase = await createServerClient();
 
+  // Fetch workers from last 48h for machine visualization
+  const cutoff48h = new Date(Date.now() - 48 * 3600_000).toISOString();
+
   const { data, error } = await supabase
     .from('worker_sessions')
     .select('id, session_number, title, status, worker_model, session_role, repo, dispatched_by, started_at, completed_at, duration_minutes, last_heartbeat, fidelity_score, fidelity_notes, error_message, failure_reason, work_item_id, created_at')
+    .gte('created_at', cutoff48h)
     .order('created_at', { ascending: false })
-    .limit(100);
+    .limit(500);
 
   if (error) {
     return (
@@ -47,13 +51,5 @@ export default async function WorkersPage() {
     created_at: row.created_at ?? new Date().toISOString(),
   }));
 
-  return (
-    <div>
-      <h1 className="text-2xl font-semibold tracking-tight">Workers</h1>
-      <p className="mt-1 mb-4 text-sm text-[var(--muted-foreground)]">
-        Worker session monitoring
-      </p>
-      <WorkersBoard initialWorkers={workers} />
-    </div>
-  );
+  return <WorkersBoard initialWorkers={workers} />;
 }

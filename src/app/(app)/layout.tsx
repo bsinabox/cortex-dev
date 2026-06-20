@@ -6,6 +6,7 @@ import { HUMAN_GATE_STATUSES } from '@/lib/constants';
 import { BottomNav } from '@/components/BottomNav';
 import { SideNav } from '@/components/SideNav';
 import { NotificationBanner } from '@/components/NotificationBanner';
+import { NotificationBell } from '@/components/NotificationBell';
 
 export default async function AppLayout({
   children,
@@ -40,6 +41,22 @@ export default async function AppLayout({
 
       {/* Main content — offset for sidebar on desktop */}
       <main className="pb-[var(--bottom-nav-height)] lg:pb-0 lg:pl-60">
+        {/* Mobile header bar */}
+        <div className="sticky top-0 z-30 flex items-center justify-between border-b border-[var(--border)] bg-[var(--card)] px-4 py-2 lg:hidden">
+          <div className="flex items-center gap-2">
+            <div className="flex h-7 w-7 items-center justify-center rounded-[6px] bg-[var(--primary)] text-xs font-bold text-white">
+              C
+            </div>
+            <span className="text-sm font-semibold tracking-tight">Cortex</span>
+          </div>
+          <NotificationBell />
+        </div>
+
+        {/* Desktop notification bell — fixed top-right */}
+        <div className="hidden lg:fixed lg:right-8 lg:top-4 lg:z-30 lg:block">
+          <NotificationBell />
+        </div>
+
         <div className="mx-auto max-w-7xl px-4 py-6 sm:px-6 lg:px-8">
           <NotificationBanner />
           <Suspense
