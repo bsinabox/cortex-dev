@@ -191,10 +191,10 @@ export const PRIORITY_CONFIG: Record<string, { bg: string; text: string; label: 
 
 // Repo display config
 export const REPO_CONFIG: Record<string, { label: string; bg: string; text: string }> = {
-  'kertec-field-app-v2': { label: 'KerTec', bg: '#DBEAFE', text: '#1E40AF' },
-  'bs-box-web': { label: 'BS Box', bg: '#F3E8FF', text: '#7C3AED' },
+  'kertec-field-app-v2': { label: 'KerTec', bg: '#F3E8FF', text: '#7C3AED' },
+  'bs-box-web': { label: 'BS Box', bg: '#FEF3C7', text: '#92400E' },
   'cortex-dev': { label: 'Cortex', bg: '#CCFBF1', text: '#0F766E' },
-  'boltbox-app': { label: 'BoltBox', bg: '#FEF3C7', text: '#92400E' },
+  'boltbox-app': { label: 'BoltBox', bg: '#DBEAFE', text: '#1E40AF' },
 };
 
 // Worker session status config
