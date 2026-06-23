@@ -8,9 +8,14 @@ import {
   PRIORITY_CONFIG,
   REPO_CONFIG,
   HUMAN_GATE_STATUSES,
-
 } from '@/lib/constants';
-import { approveItem, requestChanges } from '@/app/(app)/pipeline/actions';
+import {
+  RESOLUTION_ACTIONS,
+  RESOLUTION_ACTION_LABELS,
+  STATUS_TO_TRIGGER,
+} from '@/lib/learning';
+import type { ResolutionAction, TriggerType } from '@/lib/learning';
+import { approveWithResolution, rejectWithResolution } from './actions';
 
 type ApprovalItem = {
   id: string;
@@ -24,12 +29,13 @@ type ApprovalItem = {
   final_design_summary: string | null;
 };
 
-// Statuses where "Request changes" is a valid action
 const CHANGE_REQUESTABLE: string[] = [
   'human_review',
   'design_review_hold',
   'testing_in_dev',
 ];
+
+const H_CLASSES = ['H1', 'H2', 'H3', 'H4', 'H5', 'H6', 'H7', 'H8', 'H9'] as const;
 
 interface ApprovalsBoardProps {
   initialItems: ApprovalItem[];
@@ -41,7 +47,6 @@ export function ApprovalsBoard({ initialItems }: ApprovalsBoardProps) {
     initialItems
   );
 
-  // Filter to human-gate statuses only (realtime can bring in others)
   const items = useMemo(() => {
     return allItems
       .filter((item) =>
@@ -51,7 +56,6 @@ export function ApprovalsBoard({ initialItems }: ApprovalsBoardProps) {
         const pOrder = ['p0', 'p1', 'p2', 'p3'];
         const pDiff = pOrder.indexOf(a.priority) - pOrder.indexOf(b.priority);
         if (pDiff !== 0) return pDiff;
-        // Oldest first = longest waiting
         return new Date(a.updated_at).getTime() - new Date(b.updated_at).getTime();
       });
   }, [allItems]);
@@ -81,8 +85,10 @@ export function ApprovalsBoard({ initialItems }: ApprovalsBoardProps) {
 }
 
 function ApprovalCard({ item }: { item: ApprovalItem }) {
-  const [isApproving, setIsApproving] = useState(false);
-  const [showFeedback, setShowFeedback] = useState(false);
+  const [mode, setMode] = useState<'idle' | 'approve' | 'reject'>('idle');
+  const [resolutionAction, setResolutionAction] = useState<ResolutionAction>('approved_as_is');
+  const [resolutionDetail, setResolutionDetail] = useState('');
+  const [hClass, setHClass] = useState<string | null>(null);
   const [feedback, setFeedback] = useState('');
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [result, setResult] = useState<{ ok: boolean; error?: string } | null>(null);
@@ -96,6 +102,8 @@ function ApprovalCard({ item }: { item: ApprovalItem }) {
   const urgencyColor = hoursWaiting > 4 ? 'text-red-500' : hoursWaiting > 1 ? 'text-amber-500' : 'text-emerald-500';
 
   const canRequestChanges = CHANGE_REQUESTABLE.includes(item.status);
+  const triggerType: TriggerType = STATUS_TO_TRIGGER[item.status] ?? 'human_review';
+  const showHClass = item.status === 'design_review_hold';
 
   const statusDescription: Record<string, string> = {
     human_review: 'Needs design review',
@@ -105,25 +113,57 @@ function ApprovalCard({ item }: { item: ApprovalItem }) {
   };
 
   const handleApprove = useCallback(async () => {
-    setIsApproving(true);
+    setIsSubmitting(true);
     setResult(null);
-    const res = await approveItem(item.id);
+    const res = await approveWithResolution(item.id, {
+      trigger_type: triggerType,
+      resolution_action: resolutionAction,
+      resolution_detail: resolutionDetail,
+      h_class: hClass,
+    });
     setResult(res);
-    setIsApproving(false);
-  }, [item.id]);
+    setIsSubmitting(false);
+    if (res.ok) setMode('idle');
+  }, [item.id, triggerType, resolutionAction, resolutionDetail, hClass]);
 
-  const handleRequestChanges = useCallback(async () => {
+  const handleQuickApprove = useCallback(async () => {
+    setIsSubmitting(true);
+    setResult(null);
+    const res = await approveWithResolution(item.id, {
+      trigger_type: triggerType,
+      resolution_action: 'approved_as_is',
+      resolution_detail: '',
+      h_class: null,
+    });
+    setResult(res);
+    setIsSubmitting(false);
+  }, [item.id, triggerType]);
+
+  const handleReject = useCallback(async () => {
     if (!feedback.trim()) return;
     setIsSubmitting(true);
     setResult(null);
-    const res = await requestChanges(item.id, feedback.trim());
+    const res = await rejectWithResolution(item.id, feedback.trim(), {
+      trigger_type: triggerType,
+      resolution_action: resolutionAction,
+      resolution_detail: resolutionDetail || feedback.trim(),
+      h_class: hClass,
+    });
     setResult(res);
     setIsSubmitting(false);
     if (res.ok) {
-      setShowFeedback(false);
+      setMode('idle');
       setFeedback('');
     }
-  }, [item.id, feedback]);
+  }, [item.id, feedback, triggerType, resolutionAction, resolutionDetail, hClass]);
+
+  const resetForm = () => {
+    setMode('idle');
+    setResolutionAction('approved_as_is');
+    setResolutionDetail('');
+    setHClass(null);
+    setFeedback('');
+  };
 
   return (
     <div className="rounded-[10px] border border-[var(--border)] bg-[var(--card)] p-4">
@@ -178,30 +218,75 @@ function ApprovalCard({ item }: { item: ApprovalItem }) {
             ? 'border border-emerald-200 bg-emerald-50 text-emerald-700 dark:border-emerald-800 dark:bg-emerald-950 dark:text-emerald-300'
             : 'border border-red-200 bg-red-50 text-red-700 dark:border-red-800 dark:bg-red-950 dark:text-red-300'
         }`}>
-          {result.ok ? 'Action completed successfully' : result.error}
+          {result.ok ? 'Action completed — resolution captured' : result.error}
         </div>
       )}
 
-      {/* Feedback input */}
-      {showFeedback && (
-        <div className="mt-3 space-y-2">
-          <textarea
-            value={feedback}
-            onChange={(e) => setFeedback(e.target.value)}
-            placeholder="Describe what needs to change..."
-            className="w-full rounded-[8px] border border-[var(--border)] bg-[var(--background)] px-3 py-2 text-sm placeholder:text-[var(--muted-foreground)] focus:border-[var(--primary)] focus:outline-none"
-            rows={3}
-          />
+      {/* Resolution capture form (approve mode) */}
+      {mode === 'approve' && (
+        <div className="mt-3 space-y-3 rounded-[8px] border border-emerald-200 bg-emerald-50/50 p-3 dark:border-emerald-800 dark:bg-emerald-950/30">
+          <p className="text-xs font-medium text-emerald-700 dark:text-emerald-300">
+            Resolution capture — how was this resolved?
+          </p>
+
+          <div>
+            <label className="mb-1 block text-[11px] font-medium text-[var(--muted-foreground)]">
+              Resolution action
+            </label>
+            <select
+              value={resolutionAction}
+              onChange={(e) => setResolutionAction(e.target.value as ResolutionAction)}
+              className="w-full rounded-[6px] border border-[var(--border)] bg-[var(--background)] px-2.5 py-1.5 text-xs text-[var(--foreground)] focus:border-[var(--primary)] focus:outline-none"
+            >
+              {RESOLUTION_ACTIONS.map((action) => (
+                <option key={action} value={action}>
+                  {RESOLUTION_ACTION_LABELS[action]}
+                </option>
+              ))}
+            </select>
+          </div>
+
+          {showHClass && (
+            <div>
+              <label className="mb-1 block text-[11px] font-medium text-[var(--muted-foreground)]">
+                H-class (escalation category)
+              </label>
+              <select
+                value={hClass ?? ''}
+                onChange={(e) => setHClass(e.target.value || null)}
+                className="w-full rounded-[6px] border border-[var(--border)] bg-[var(--background)] px-2.5 py-1.5 text-xs text-[var(--foreground)] focus:border-[var(--primary)] focus:outline-none"
+              >
+                <option value="">None / not applicable</option>
+                {H_CLASSES.map((hc) => (
+                  <option key={hc} value={hc}>{hc}</option>
+                ))}
+              </select>
+            </div>
+          )}
+
+          <div>
+            <label className="mb-1 block text-[11px] font-medium text-[var(--muted-foreground)]">
+              Detail (optional)
+            </label>
+            <textarea
+              value={resolutionDetail}
+              onChange={(e) => setResolutionDetail(e.target.value)}
+              placeholder="Brief notes on what you did or changed..."
+              className="w-full rounded-[6px] border border-[var(--border)] bg-[var(--background)] px-2.5 py-1.5 text-xs placeholder:text-[var(--muted-foreground)] focus:border-[var(--primary)] focus:outline-none"
+              rows={2}
+            />
+          </div>
+
           <div className="flex gap-2">
             <button
-              onClick={handleRequestChanges}
-              disabled={isSubmitting || !feedback.trim()}
-              className="rounded-[8px] bg-amber-500 px-3 py-1.5 text-xs font-medium text-white transition-colors hover:bg-amber-600 disabled:opacity-50"
+              onClick={handleApprove}
+              disabled={isSubmitting}
+              className="rounded-[8px] bg-emerald-600 px-4 py-1.5 text-xs font-medium text-white transition-colors hover:bg-emerald-700 disabled:opacity-50"
             >
-              {isSubmitting ? 'Sending...' : 'Send feedback'}
+              {isSubmitting ? 'Approving...' : 'Approve with resolution'}
             </button>
             <button
-              onClick={() => { setShowFeedback(false); setFeedback(''); }}
+              onClick={resetForm}
               className="rounded-[8px] border border-[var(--border)] px-3 py-1.5 text-xs text-[var(--muted-foreground)] transition-colors hover:bg-[var(--muted)]"
             >
               Cancel
@@ -210,19 +295,98 @@ function ApprovalCard({ item }: { item: ApprovalItem }) {
         </div>
       )}
 
-      {/* Action buttons */}
-      {!showFeedback && !result?.ok && (
+      {/* Reject/request changes form */}
+      {mode === 'reject' && (
+        <div className="mt-3 space-y-3 rounded-[8px] border border-amber-200 bg-amber-50/50 p-3 dark:border-amber-800 dark:bg-amber-950/30">
+          <p className="text-xs font-medium text-amber-700 dark:text-amber-300">
+            Request changes — describe the issue and classify the resolution
+          </p>
+
+          <div>
+            <label className="mb-1 block text-[11px] font-medium text-[var(--muted-foreground)]">
+              Feedback
+            </label>
+            <textarea
+              value={feedback}
+              onChange={(e) => setFeedback(e.target.value)}
+              placeholder="Describe what needs to change..."
+              className="w-full rounded-[6px] border border-[var(--border)] bg-[var(--background)] px-2.5 py-1.5 text-xs placeholder:text-[var(--muted-foreground)] focus:border-[var(--primary)] focus:outline-none"
+              rows={3}
+            />
+          </div>
+
+          <div>
+            <label className="mb-1 block text-[11px] font-medium text-[var(--muted-foreground)]">
+              Resolution type
+            </label>
+            <select
+              value={resolutionAction}
+              onChange={(e) => setResolutionAction(e.target.value as ResolutionAction)}
+              className="w-full rounded-[6px] border border-[var(--border)] bg-[var(--background)] px-2.5 py-1.5 text-xs text-[var(--foreground)] focus:border-[var(--primary)] focus:outline-none"
+            >
+              {RESOLUTION_ACTIONS.map((action) => (
+                <option key={action} value={action}>
+                  {RESOLUTION_ACTION_LABELS[action]}
+                </option>
+              ))}
+            </select>
+          </div>
+
+          {showHClass && (
+            <div>
+              <label className="mb-1 block text-[11px] font-medium text-[var(--muted-foreground)]">
+                H-class
+              </label>
+              <select
+                value={hClass ?? ''}
+                onChange={(e) => setHClass(e.target.value || null)}
+                className="w-full rounded-[6px] border border-[var(--border)] bg-[var(--background)] px-2.5 py-1.5 text-xs text-[var(--foreground)] focus:border-[var(--primary)] focus:outline-none"
+              >
+                <option value="">None</option>
+                {H_CLASSES.map((hc) => (
+                  <option key={hc} value={hc}>{hc}</option>
+                ))}
+              </select>
+            </div>
+          )}
+
+          <div className="flex gap-2">
+            <button
+              onClick={handleReject}
+              disabled={isSubmitting || !feedback.trim()}
+              className="rounded-[8px] bg-amber-500 px-4 py-1.5 text-xs font-medium text-white transition-colors hover:bg-amber-600 disabled:opacity-50"
+            >
+              {isSubmitting ? 'Sending...' : 'Send with resolution'}
+            </button>
+            <button
+              onClick={resetForm}
+              className="rounded-[8px] border border-[var(--border)] px-3 py-1.5 text-xs text-[var(--muted-foreground)] transition-colors hover:bg-[var(--muted)]"
+            >
+              Cancel
+            </button>
+          </div>
+        </div>
+      )}
+
+      {/* Primary action buttons */}
+      {mode === 'idle' && !result?.ok && (
         <div className="mt-3 flex flex-wrap items-center gap-2">
           <button
-            onClick={handleApprove}
-            disabled={isApproving}
+            onClick={handleQuickApprove}
+            disabled={isSubmitting}
             className="rounded-[8px] bg-emerald-600 px-4 py-1.5 text-xs font-medium text-white transition-colors hover:bg-emerald-700 disabled:opacity-50"
           >
-            {isApproving ? 'Approving...' : 'Approve'}
+            {isSubmitting ? 'Approving...' : 'Approve'}
+          </button>
+          <button
+            onClick={() => { setMode('approve'); setResolutionAction('approved_as_is'); }}
+            className="rounded-[8px] border border-emerald-300 px-3 py-1.5 text-xs font-medium text-emerald-700 transition-colors hover:bg-emerald-50 dark:border-emerald-700 dark:text-emerald-300 dark:hover:bg-emerald-950"
+          >
+            Approve with details
           </button>
           {canRequestChanges && (
             <button
-              onClick={() => setShowFeedback(true)}
+              onClick={() => { setMode('reject'); setResolutionAction('major_revision'); }}
               className="rounded-[8px] bg-amber-500 px-4 py-1.5 text-xs font-medium text-white transition-colors hover:bg-amber-600"
             >
               Request changes
