@@ -130,7 +130,7 @@ self.addEventListener('notificationclick', (event) => {
 
   const targetUrl = event.notification.data?.url || '/pipeline';
 
-  const safeUrl = (targetUrl && targetUrl.startsWith('/')) ? targetUrl : '/pipeline';
+  const safeUrl = (targetUrl && targetUrl.startsWith('/') && !targetUrl.startsWith('//')) ? targetUrl : '/pipeline';
 
   event.waitUntil(
     self.clients.matchAll({ type: 'window', includeUncontrolled: true }).then((clients) => {

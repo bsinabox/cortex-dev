@@ -33,7 +33,7 @@ export async function POST(request: NextRequest) {
       return NextResponse.json({ error: 'title or body too long' }, { status: 400 });
     }
 
-    if (body.url && (typeof body.url !== 'string' || !body.url.startsWith('/') || body.url.length > 500)) {
+    if (body.url && (typeof body.url !== 'string' || !body.url.startsWith('/') || body.url.startsWith('//') || body.url.length > 500)) {
       return NextResponse.json({ error: 'url must be a relative path' }, { status: 400 });
     }
 
