@@ -12,7 +12,7 @@ export type PushPayload = {
 export async function sendPushNotification(payload: PushPayload): Promise<{
   sent: number;
   total: number;
-  results: Array<{ id: string; status: string; error?: string }>;
+  results: Array<{ id: string; status: string }>;
 }> {
   const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL;
   const serviceKey = process.env.SUPABASE_SERVICE_ROLE_KEY;

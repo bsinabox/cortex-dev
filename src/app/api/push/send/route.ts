@@ -45,7 +45,10 @@ export async function POST(request: NextRequest) {
     }
 
     const result = await sendPushNotification(body);
-    return NextResponse.json(result);
+    return NextResponse.json({
+      sent: result.sent,
+      total: result.total,
+    });
   } catch (err) {
     console.error('Push send error:', err);
     return NextResponse.json({ error: 'Push notification failed' }, { status: 500 });

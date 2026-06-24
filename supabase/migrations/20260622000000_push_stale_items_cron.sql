@@ -59,7 +59,7 @@ BEGIN
       url := v_edge_url,
       headers := jsonb_build_object(
         'Content-Type', 'application/json',
-        'Authorization', 'Bearer ' || COALESCE(v_service_key, '')
+        'Authorization', 'Bearer ' || v_service_key
       ),
       body := jsonb_build_object(
         'title', v_sid || ' stalled (' || v_item.status || ')',

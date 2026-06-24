@@ -28,7 +28,7 @@ export async function POST() {
       user_ids: [user.id],
     });
 
-    return NextResponse.json({ status: 'ok', ...result });
+    return NextResponse.json({ status: 'ok', sent: result.sent, total: result.total });
   } catch (err) {
     console.error('Push test error:', err);
     return NextResponse.json({ error: 'Push test failed' }, { status: 500 });

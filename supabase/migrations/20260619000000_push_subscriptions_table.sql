@@ -97,7 +97,14 @@ BEGIN
   SELECT value INTO v_edge_url
     FROM agentic_config WHERE key = 'supabase_edge_function_url';
   IF v_edge_url IS NULL THEN
-    v_edge_url := current_setting('app.supabase_url', true) || '/functions/v1/push-notify';
+    v_edge_url := current_setting('app.supabase_url', true);
+    IF v_edge_url IS NOT NULL THEN
+      v_edge_url := v_edge_url || '/functions/v1/push-notify';
+    END IF;
+  END IF;
+  IF v_edge_url IS NULL THEN
+    RAISE LOG 'notify_pipeline_status_change: no edge function URL configured — set supabase_edge_function_url in agentic_config';
+    RETURN NEW;
   END IF;
 
   SELECT value INTO v_service_key
@@ -112,7 +119,7 @@ BEGIN
     url := v_edge_url,
     headers := jsonb_build_object(
       'Content-Type', 'application/json',
-      'Authorization', 'Bearer ' || COALESCE(v_service_key, '')
+      'Authorization', 'Bearer ' || v_service_key
     ),
     body := jsonb_build_object(
       'title', v_title,
