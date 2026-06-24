@@ -35,20 +35,13 @@ END $$;
 ALTER TABLE public.cortex_dev_push_subscriptions ENABLE ROW LEVEL SECURITY;
 
 -- RLS policy: authenticated users manage their own subscriptions
-DO $$ BEGIN
-  IF NOT EXISTS (
-    SELECT 1 FROM pg_policy
-    WHERE polrelid = 'cortex_dev_push_subscriptions'::regclass
-      AND polname = 'users_manage_own_push_subs'
-  ) THEN
-    CREATE POLICY users_manage_own_push_subs
-      ON public.cortex_dev_push_subscriptions
-      FOR ALL
-      TO authenticated
-      USING (auth.uid() = user_id)
-      WITH CHECK (auth.uid() = user_id);
-  END IF;
-END $$;
+DROP POLICY IF EXISTS users_manage_own_push_subs ON public.cortex_dev_push_subscriptions;
+CREATE POLICY users_manage_own_push_subs
+  ON public.cortex_dev_push_subscriptions
+  FOR ALL
+  TO authenticated
+  USING (auth.uid() = user_id)
+  WITH CHECK (auth.uid() = user_id);
 
 -- Pipeline status-change trigger function (initial version).
 -- This is replaced by 20260624000000_push_trigger_add_status.sql with expanded
@@ -109,6 +102,11 @@ BEGIN
 
   SELECT value INTO v_service_key
     FROM agentic_config WHERE key = 'supabase_service_role_key';
+
+  IF v_service_key IS NULL THEN
+    RAISE LOG 'notify_pipeline_status_change: no service role key configured — set supabase_service_role_key in agentic_config';
+    RETURN NEW;
+  END IF;
 
   PERFORM net.http_post(
     url := v_edge_url,

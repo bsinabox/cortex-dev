@@ -29,6 +29,10 @@ export async function POST(request: NextRequest) {
       return NextResponse.json({ error: 'Invalid subscription' }, { status: 400 });
     }
 
+    if (endpoint.length > 2048 || keys.p256dh.length > 256 || keys.auth.length > 256) {
+      return NextResponse.json({ error: 'Input too long' }, { status: 400 });
+    }
+
     try {
       const parsed = new URL(endpoint);
       if (parsed.protocol !== 'https:') {

@@ -110,7 +110,7 @@ export function NotificationBanner() {
       await registerSubscription();
     } catch (err) {
       console.error('[Push] Subscribe error:', err);
-      setState('prompt');
+      setState(Notification.permission === 'denied' ? 'denied' : 'prompt');
     }
   }, [registerSubscription]);
 

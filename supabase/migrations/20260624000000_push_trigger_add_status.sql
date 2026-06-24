@@ -100,6 +100,11 @@ BEGIN
   SELECT value INTO v_service_key
     FROM agentic_config WHERE key = 'supabase_service_role_key';
 
+  IF v_service_key IS NULL THEN
+    RAISE LOG 'notify_pipeline_status_change: no service role key configured — set supabase_service_role_key in agentic_config';
+    RETURN NEW;
+  END IF;
+
   PERFORM net.http_post(
     url := v_edge_url,
     headers := jsonb_build_object(

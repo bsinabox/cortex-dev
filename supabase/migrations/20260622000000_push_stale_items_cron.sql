@@ -35,6 +35,11 @@ BEGIN
   SELECT value INTO v_service_key
     FROM agentic_config WHERE key = 'supabase_service_role_key';
 
+  IF v_service_key IS NULL THEN
+    RAISE LOG 'check_stale_pipeline_items: no service role key configured — set supabase_service_role_key in agentic_config';
+    RETURN;
+  END IF;
+
   FOR v_item IN
     SELECT id, title, status, updated_at
     FROM agentic_items
