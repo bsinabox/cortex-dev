@@ -61,7 +61,7 @@ export function NotificationBanner() {
     setState('prompt');
   }
 
-  async function registerSubscription() {
+  const registerSubscription = useCallback(async () => {
     setState('subscribing');
     try {
       const reg = await navigator.serviceWorker.ready;
@@ -92,7 +92,7 @@ export function NotificationBanner() {
       console.error('[Push] Subscribe error:', err);
       setState('prompt');
     }
-  }
+  }, []);
 
   const doSubscribe = useCallback(async () => {
     setState('subscribing');
@@ -107,7 +107,7 @@ export function NotificationBanner() {
       console.error('[Push] Subscribe error:', err);
       setState('prompt');
     }
-  }, []);
+  }, [registerSubscription]);
 
   const dismiss = () => {
     setDismissed(true);

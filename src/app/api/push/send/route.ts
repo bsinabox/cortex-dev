@@ -17,7 +17,12 @@ export async function POST(request: NextRequest) {
       return NextResponse.json({ error: 'Operator access required' }, { status: 403 });
     }
 
-    const body: PushPayload = await request.json();
+    let body: PushPayload;
+    try {
+      body = await request.json();
+    } catch {
+      return NextResponse.json({ error: 'Invalid JSON body' }, { status: 400 });
+    }
 
     if (!body.title || !body.body) {
       return NextResponse.json({ error: 'title and body are required' }, { status: 400 });
