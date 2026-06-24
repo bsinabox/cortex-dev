@@ -93,7 +93,7 @@ export function NotificationBanner() {
         setState('subscribed');
         setShowConfirm(true);
       } else {
-        console.error('[Push] Subscribe API failed:', await response.text());
+        console.error('[Push] Subscribe API failed:', response.status);
         setState('prompt');
       }
     } catch (err) {
