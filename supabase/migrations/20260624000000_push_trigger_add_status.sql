@@ -79,6 +79,7 @@ BEGIN
       v_batch_complete := TRUE;
       v_title := 'Batch complete: ' || NEW.batch_id;
       v_body := v_batch_total || ' items done';
+      v_url := '/pipeline?batch=' || NEW.batch_id;
       v_tag := 'batch-' || NEW.batch_id;
       v_priority := 'high';
     END IF;

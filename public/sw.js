@@ -28,17 +28,25 @@ self.addEventListener('fetch', (event) => {
   // Skip non-GET and cross-origin
   if (request.method !== 'GET' || url.origin !== self.location.origin) return;
 
-  // API calls — network first, offline fallback
+  // API calls — network first, cache fallback
   if (url.pathname.startsWith('/api/') || url.pathname.startsWith('/_next/data/')) {
     event.respondWith(
-      fetch(request).catch(() =>
-        caches.match(request).then((cached) =>
-          cached || new Response(JSON.stringify({ error: 'Offline' }), {
-            status: 503,
-            headers: { 'Content-Type': 'application/json' },
-          })
+      fetch(request)
+        .then((response) => {
+          if (response.ok) {
+            const clone = response.clone();
+            caches.open(CACHE_NAME).then((cache) => cache.put(request, clone));
+          }
+          return response;
+        })
+        .catch(() =>
+          caches.match(request).then((cached) =>
+            cached || new Response(JSON.stringify({ error: 'Offline' }), {
+              status: 503,
+              headers: { 'Content-Type': 'application/json' },
+            })
+          )
         )
-      )
     );
     return;
   }
@@ -82,7 +90,15 @@ self.addEventListener('fetch', (event) => {
 
 // Push notifications
 self.addEventListener('push', (event) => {
-  if (!event.data) return;
+  if (!event.data) {
+    event.waitUntil(
+      self.registration.showNotification('Cortex Dev', {
+        body: 'New notification',
+        icon: '/icons/icon-192.png',
+      })
+    );
+    return;
+  }
 
   event.waitUntil(
     (async () => {
@@ -120,10 +136,13 @@ self.addEventListener('notificationclick', (event) => {
     self.clients.matchAll({ type: 'window', includeUncontrolled: true }).then((clients) => {
       for (const client of clients) {
         if (new URL(client.url).origin === self.location.origin && 'focus' in client) {
-          return client.navigate(safeUrl).then(() => client.focus());
+          return client.navigate(safeUrl).then(() => client.focus())
+            .catch(() => self.clients.openWindow(safeUrl));
         }
       }
       return self.clients.openWindow(safeUrl);
+    }).catch((err) => {
+      console.error('[SW] Notification click error:', err);
     })
   );
 });

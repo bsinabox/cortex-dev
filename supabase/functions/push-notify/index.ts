@@ -29,8 +29,11 @@ Deno.serve(async (req) => {
         },
       );
     }
-    const { title, body, url, tag, priority, status, user_ids, item_sid } =
+    const { title: rawTitle, body: rawBody, url, tag, priority, status, user_ids, item_sid } =
       payload;
+
+    const title = typeof rawTitle === "string" ? rawTitle.slice(0, 200) : undefined;
+    const body = typeof rawBody === "string" ? rawBody.slice(0, 1000) : undefined;
 
     const { data: configRows } = await supabase
       .from("agentic_config")
