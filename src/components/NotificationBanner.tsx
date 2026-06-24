@@ -48,12 +48,17 @@ export function NotificationBanner() {
     }
 
     if (permission === 'granted') {
-      const reg = await navigator.serviceWorker.ready;
-      const existing = await reg.pushManager.getSubscription();
-      if (existing) {
-        setState('subscribed');
-      } else {
-        await registerSubscription();
+      try {
+        const reg = await navigator.serviceWorker.ready;
+        const existing = await reg.pushManager.getSubscription();
+        if (existing) {
+          setState('subscribed');
+        } else {
+          await registerSubscription();
+        }
+      } catch (err) {
+        console.error('[Push] checkState error:', err);
+        setState('prompt');
       }
       return;
     }

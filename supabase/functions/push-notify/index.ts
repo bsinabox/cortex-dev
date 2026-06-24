@@ -55,7 +55,8 @@ Deno.serve(async (req) => {
     let query = supabase
       .from("cortex_dev_push_subscriptions")
       .select("id, endpoint, p256dh, auth_key, user_id, failure_count")
-      .eq("active", true);
+      .eq("active", true)
+      .lt("failure_count", 5);
 
     if (user_ids && user_ids.length > 0) {
       query = query.in("user_id", user_ids);
@@ -119,9 +120,13 @@ Deno.serve(async (req) => {
             .eq("id", sub.id);
           results.push({ id: sub.id, status: "expired" });
         } else {
+          const newCount = (sub.failure_count || 0) + 1;
           await supabase
             .from("cortex_dev_push_subscriptions")
-            .update({ failure_count: (sub.failure_count || 0) + 1 })
+            .update({
+              failure_count: newCount,
+              ...(newCount >= 5 ? { active: false } : {}),
+            })
             .eq("id", sub.id);
           results.push({
             id: sub.id,
