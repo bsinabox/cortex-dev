@@ -15,7 +15,7 @@ interface ItemDetailActionsProps {
 const APPROVABLE = new Set(['human_review', 'testing_in_dev', 'design_review_hold', 'promotion_review']);
 const CHANGEABLE = new Set(['human_review', 'testing_in_dev', 'design_review_hold']);
 
-export function ItemDetailActions({ itemId, sid, status, bootPrompt, needsAction }: ItemDetailActionsProps) {
+export function ItemDetailActions({ itemId, sid: _sid, status, bootPrompt, needsAction: _needsAction }: ItemDetailActionsProps) {
   const router = useRouter();
   const [pending, startTransition] = useTransition();
   const [actionResult, setActionResult] = useState<{ type: 'success' | 'error'; msg: string } | null>(null);
