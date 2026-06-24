@@ -9,14 +9,15 @@ self.addEventListener('install', (event) => {
   );
 });
 
-// Activate — clean old caches
+// Activate — clean old caches, then claim clients
 self.addEventListener('activate', (event) => {
   event.waitUntil(
-    caches.keys().then((keys) =>
-      Promise.all(keys.filter((k) => k !== CACHE_NAME).map((k) => caches.delete(k)))
-    )
+    caches.keys()
+      .then((keys) =>
+        Promise.all(keys.filter((k) => k !== CACHE_NAME).map((k) => caches.delete(k)))
+      )
+      .then(() => self.clients.claim())
   );
-  self.clients.claim();
 });
 
 // Fetch — network-first for API, cache-first for static
@@ -27,10 +28,17 @@ self.addEventListener('fetch', (event) => {
   // Skip non-GET and cross-origin
   if (request.method !== 'GET' || url.origin !== self.location.origin) return;
 
-  // API calls — network first
+  // API calls — network first, offline fallback
   if (url.pathname.startsWith('/api/') || url.pathname.startsWith('/_next/data/')) {
     event.respondWith(
-      fetch(request).catch(() => caches.match(request))
+      fetch(request).catch(() =>
+        caches.match(request).then((cached) =>
+          cached || new Response(JSON.stringify({ error: 'Offline' }), {
+            status: 503,
+            headers: { 'Content-Type': 'application/json' },
+          })
+        )
+      )
     );
     return;
   }
@@ -43,12 +51,14 @@ self.addEventListener('fetch', (event) => {
     return;
   }
 
-  // Pages — network first, cache fallback
+  // Pages — network first, cache fallback (only cache successful responses)
   event.respondWith(
     fetch(request)
       .then((response) => {
-        const clone = response.clone();
-        caches.open(CACHE_NAME).then((cache) => cache.put(request, clone));
+        if (response.ok) {
+          const clone = response.clone();
+          caches.open(CACHE_NAME).then((cache) => cache.put(request, clone));
+        }
         return response;
       })
       .catch(() => caches.match(request))
