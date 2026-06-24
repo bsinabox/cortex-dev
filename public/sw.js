@@ -43,10 +43,21 @@ self.addEventListener('fetch', (event) => {
     return;
   }
 
-  // Static assets — cache first
+  // Static assets — cache first, store on miss
   if (url.pathname.startsWith('/_next/static/') || url.pathname.startsWith('/icons/')) {
     event.respondWith(
-      caches.match(request).then((cached) => cached || fetch(request))
+      caches.match(request).then((cached) => {
+        if (cached) return cached;
+        return fetch(request)
+          .then((response) => {
+            if (response.ok) {
+              const clone = response.clone();
+              caches.open(CACHE_NAME).then((cache) => cache.put(request, clone));
+            }
+            return response;
+          })
+          .catch(() => new Response('', { status: 503 }));
+      })
     );
     return;
   }
@@ -103,17 +114,16 @@ self.addEventListener('notificationclick', (event) => {
 
   const targetUrl = event.notification.data?.url || '/pipeline';
 
+  const safeUrl = (targetUrl && targetUrl.startsWith('/')) ? targetUrl : '/pipeline';
+
   event.waitUntil(
     self.clients.matchAll({ type: 'window', includeUncontrolled: true }).then((clients) => {
-      // Focus existing window if available
       for (const client of clients) {
         if (new URL(client.url).origin === self.location.origin && 'focus' in client) {
-          client.navigate(targetUrl);
-          return client.focus();
+          return client.navigate(safeUrl).then(() => client.focus());
         }
       }
-      // Otherwise open new window
-      return self.clients.openWindow(targetUrl);
+      return self.clients.openWindow(safeUrl);
     })
   );
 });

@@ -17,7 +17,18 @@ Deno.serve(async (req) => {
     const serviceKey = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!;
     const supabase = createClient(supabaseUrl, serviceKey);
 
-    const payload = await req.json();
+    let payload;
+    try {
+      payload = await req.json();
+    } catch {
+      return new Response(
+        JSON.stringify({ error: "Invalid JSON body" }),
+        {
+          status: 400,
+          headers: { ...corsHeaders, "Content-Type": "application/json" },
+        },
+      );
+    }
     const { title, body, url, tag, priority, status, user_ids, item_sid } =
       payload;
 
@@ -96,46 +107,52 @@ Deno.serve(async (req) => {
       tag: tag || "cortex-notification",
     });
 
-    const results: Array<{ id: string; status: string; error?: string }> = [];
-
-    for (const sub of subscriptions) {
-      try {
-        await webpush.sendNotification(
-          {
-            endpoint: sub.endpoint,
-            keys: {
-              p256dh: sub.p256dh,
-              auth: sub.auth_key,
-            },
-          },
-          notificationPayload,
-        );
-        results.push({ id: sub.id, status: "sent" });
-      } catch (err: unknown) {
-        const pushErr = err as { statusCode?: number; message?: string };
-        if (pushErr.statusCode === 410 || pushErr.statusCode === 404) {
-          await supabase
-            .from("cortex_dev_push_subscriptions")
-            .update({ active: false })
-            .eq("id", sub.id);
-          results.push({ id: sub.id, status: "expired" });
-        } else {
-          const newCount = (sub.failure_count || 0) + 1;
-          await supabase
-            .from("cortex_dev_push_subscriptions")
-            .update({
-              failure_count: newCount,
-              ...(newCount >= 5 ? { active: false } : {}),
-            })
-            .eq("id", sub.id);
-          results.push({
-            id: sub.id,
-            status: "failed",
-            error: pushErr.message || "Unknown error",
-          });
-        }
-      }
-    }
+    const results: Array<{ id: string; status: string; error?: string }> =
+      await Promise.all(
+        subscriptions.map(async (sub) => {
+          try {
+            await webpush.sendNotification(
+              {
+                endpoint: sub.endpoint,
+                keys: {
+                  p256dh: sub.p256dh,
+                  auth: sub.auth_key,
+                },
+              },
+              notificationPayload,
+            );
+            if (sub.failure_count > 0) {
+              await supabase
+                .from("cortex_dev_push_subscriptions")
+                .update({ failure_count: 0 })
+                .eq("id", sub.id);
+            }
+            return { id: sub.id, status: "sent" };
+          } catch (err: unknown) {
+            const pushErr = err as { statusCode?: number; message?: string };
+            if (pushErr.statusCode === 410 || pushErr.statusCode === 404) {
+              await supabase
+                .from("cortex_dev_push_subscriptions")
+                .update({ active: false })
+                .eq("id", sub.id);
+              return { id: sub.id, status: "expired" };
+            }
+            const newCount = (sub.failure_count || 0) + 1;
+            await supabase
+              .from("cortex_dev_push_subscriptions")
+              .update({
+                failure_count: newCount,
+                ...(newCount >= 5 ? { active: false } : {}),
+              })
+              .eq("id", sub.id);
+            return {
+              id: sub.id,
+              status: "failed",
+              error: pushErr.message || "Unknown error",
+            };
+          }
+        }),
+      );
 
     const sentCount = results.filter((r) => r.status === "sent").length;
     const sid = item_sid || "unknown";
