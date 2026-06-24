@@ -137,13 +137,14 @@ Deno.serve(async (req) => {
     const fingerprint = `push:${sid}:${crypto.randomUUID().slice(0, 8)}`;
 
     const { error: logErr } = await supabase.from("agentic_ops_log").insert({
-      class: "cortex",
+      class: "push_notification",
       fingerprint,
       kind: "event",
       title: `Push: ${title || "notification"}`,
       detail: `Sent to ${sentCount}/${results.length} subscriptions. status=${status || "n/a"}, tag=${tag || "none"}`,
       severity: "info",
       status: "resolved",
+      repo: "cortex-dev",
     });
 
     if (logErr) {
