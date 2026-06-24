@@ -82,6 +82,12 @@ BEGIN
 END;
 $$;
 
+DO $$ BEGIN
+  PERFORM cron.unschedule('check-stale-pipeline-items');
+EXCEPTION WHEN OTHERS THEN
+  NULL;
+END $$;
+
 SELECT cron.schedule(
   'check-stale-pipeline-items',
   '*/30 * * * *',

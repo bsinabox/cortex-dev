@@ -78,7 +78,7 @@ Deno.serve(async (req) => {
 
     if (!subscriptions || subscriptions.length === 0) {
       return new Response(
-        JSON.stringify({ sent: 0, message: "No active subscriptions" }),
+        JSON.stringify({ sent: 0, total: 0, results: [] }),
         { headers: { ...corsHeaders, "Content-Type": "application/json" } },
       );
     }
