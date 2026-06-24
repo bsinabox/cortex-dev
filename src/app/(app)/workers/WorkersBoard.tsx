@@ -171,7 +171,7 @@ export function WorkersBoard({ initialWorkers }: WorkersBoardProps) {
 
 /* ─── Stat Box ─── */
 
-function StatBox({ label, count, color, icon, pulse }: {
+function StatBox({ label, count, color, icon: _icon, pulse }: {
   label: string; count: number; color: string; icon: string; pulse?: boolean;
 }) {
   return (
@@ -223,7 +223,6 @@ function MachineColumn({ title, color, items, icon, pulse }: {
 /* ─── Worker Dot (inside machine column) ─── */
 
 function WorkerDot({ worker, color, pulse }: { worker: WorkerSession; color: string; pulse?: boolean }) {
-  const sid = worker.id.substring(0, 6).toUpperCase();
   const failed = worker.status === 'failed';
   const dotColor = failed ? '#ef4444' : color;
 
