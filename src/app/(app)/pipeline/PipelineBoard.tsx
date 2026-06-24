@@ -1,13 +1,13 @@
 'use client';
 
-import { useState, useMemo, useCallback, useRef, useTransition } from 'react';
+import { useState, useMemo, useCallback, useRef, useTransition, useEffect } from 'react';
 import Link from 'next/link';
 import { useRealtimeTable } from '@/hooks/useRealtimeTable';
 import { type PipelineItem } from '@/components/ItemCard';
 import { reassignComponent } from './actions';
 import {
   PIPELINE_PHASES, getPhaseIndex, getPhaseForStatus, getPhasesForPolicy,
-  QUEUE_STATUSES, BLOCKED_STATUSES, DONE_STATUSES, waitTime,
+  QUEUE_STATUSES, BLOCKED_STATUSES, DONE_STATUSES, waitTime, REPO_CONFIG,
 } from '@/lib/constants';
 
 /* ─── Types ─── */
@@ -117,6 +117,25 @@ function statusHint(status: string): string {
   return hints[status] ?? status;
 }
 
+/* ─── Active filter ─── */
+
+const FORTY_EIGHT_HOURS_MS = 48 * 60 * 60 * 1000;
+
+function isActiveItem(item: PipelineItem): boolean {
+  if (['done', 'subtasks_complete', 'cancelled', 'failed'].includes(item.status)) return false;
+  if (item.status === 'human_review') {
+    const ageMs = Date.now() - new Date(item.updated_at).getTime();
+    if (ageMs > FORTY_EIGHT_HOURS_MS) return false;
+  }
+  return true;
+}
+
+/* ─── Batch formatting ─── */
+
+function formatBatchId(batchId: string): string {
+  return batchId.split('_').map(w => w.charAt(0).toUpperCase() + w.slice(1)).join(' ');
+}
+
 /* ─── Component ─── */
 
 interface PipelineBoardProps {
@@ -138,6 +157,21 @@ export function PipelineBoard({ plans: initialPlans, singles: initialSingles }: 
   // Track component owners locally for optimistic updates
   const [ownerOverrides, setOwnerOverrides] = useState<Record<string, string>>({});
 
+  // Active filter (default ON)
+  const [activeOnly, setActiveOnly] = useState(true);
+
+  // Repo filter (persisted in localStorage)
+  const [repoFilter, setRepoFilter] = useState<string | null>(null);
+  useEffect(() => {
+    const stored = localStorage.getItem('cortex-pipeline-repo-filter');
+    if (stored) setRepoFilter(stored);
+  }, []);
+  const handleRepoFilter = useCallback((repo: string | null) => {
+    setRepoFilter(repo);
+    if (repo) localStorage.setItem('cortex-pipeline-repo-filter', repo);
+    else localStorage.removeItem('cortex-pipeline-repo-filter');
+  }, []);
+
   // Pull-to-refresh
   const [pullDist, setPullDist] = useState(0);
   const [refreshing, setRefreshing] = useState(false);
@@ -146,7 +180,27 @@ export function PipelineBoard({ plans: initialPlans, singles: initialSingles }: 
   const onTM = useCallback((e: React.TouchEvent) => { if (refreshing || window.scrollY > 0) return; const d = e.touches[0].clientY - touchY.current; if (d > 0) setPullDist(Math.min(d * 0.5, PULL_THRESHOLD + 20)); }, [refreshing]);
   const onTE = useCallback(async () => { if (pullDist >= PULL_THRESHOLD && !refreshing) { setRefreshing(true); setPullDist(PULL_THRESHOLD); await refresh(); setRefreshing(false); } setPullDist(0); }, [pullDist, refreshing, refresh]);
 
-  // Regroup items by component using live data
+  // Available repos (unfiltered, for filter pills)
+  const availableRepos = useMemo(() => {
+    const repos = new Set<string>();
+    for (const item of allItems) { if (item.repo) repos.add(item.repo); }
+    return Array.from(repos).sort();
+  }, [allItems]);
+
+  // Batch totals from ALL items (unfiltered) for accurate progress (QA fix #3)
+  const batchTotals = useMemo(() => {
+    const totals = new Map<string, { total: number; done: number }>();
+    for (const item of allItems) {
+      if (!item.batch_id) continue;
+      const entry = totals.get(item.batch_id) ?? { total: 0, done: 0 };
+      entry.total++;
+      if (DONE_STATUSES.includes(item.status)) entry.done++;
+      totals.set(item.batch_id, entry);
+    }
+    return totals;
+  }, [allItems]);
+
+  // Regroup items by component using live data, with filters + recency sort
   const { livePlans, liveSingles } = useMemo(() => {
     const compMap = new Map<string, BuildComponent>();
     for (const p of initialPlans) {
@@ -155,10 +209,18 @@ export function PipelineBoard({ plans: initialPlans, singles: initialSingles }: 
       compMap.set(comp.id, comp);
     }
 
-    const planItems = new Map<string, PipelineItem[]>();
-    const sng: PipelineItem[] = [];
+    let filtered: PipelineItem[] = repoFilter
+      ? allItems.filter(i => i.repo === repoFilter)
+      : allItems;
 
-    for (const item of allItems) {
+    filtered = [...filtered].sort((a, b) =>
+      new Date(b.updated_at).getTime() - new Date(a.updated_at).getTime()
+    );
+
+    const planItems = new Map<string, PipelineItem[]>();
+    let sng: PipelineItem[] = [];
+
+    for (const item of filtered) {
       if (item.component_id && compMap.has(item.component_id)) {
         const list = planItems.get(item.component_id) ?? [];
         list.push(item);
@@ -168,14 +230,23 @@ export function PipelineBoard({ plans: initialPlans, singles: initialSingles }: 
       }
     }
 
-    const lp: BuildPlan[] = [];
+    let lp: BuildPlan[] = [];
     for (const [cid, items] of planItems) {
       const comp = compMap.get(cid);
       if (comp) lp.push({ component: comp, items });
     }
+
+    // QA fix #1: filter inactive items WITHIN each plan, not just whole plans
+    if (activeOnly) {
+      lp = lp
+        .map(p => ({ ...p, items: p.items.filter(isActiveItem) }))
+        .filter(p => p.items.length > 0);
+      sng = sng.filter(isActiveItem);
+    }
+
     lp.sort((a, b) => b.items.length - a.items.length);
     return { livePlans: lp, liveSingles: sng };
-  }, [allItems, initialPlans, ownerOverrides]);
+  }, [allItems, initialPlans, ownerOverrides, activeOnly, repoFilter]);
 
   // Filter by person
   const personPlans = livePlans.filter(p => p.component.owner === person);
@@ -187,6 +258,22 @@ export function PipelineBoard({ plans: initialPlans, singles: initialSingles }: 
 
   // Drill target
   const drillPlan = drillId ? personPlans.find(p => p.component.id === drillId) ?? null : null;
+
+  // Batch grouping for singles (QA fix #2: also handle component batches in DrillView)
+  const { batchGroups, ungroupedSingles } = useMemo(() => {
+    const groups = new Map<string, PipelineItem[]>();
+    const ungrouped: PipelineItem[] = [];
+    for (const item of personSingles) {
+      if (item.batch_id) {
+        const list = groups.get(item.batch_id) ?? [];
+        list.push(item);
+        groups.set(item.batch_id, list);
+      } else {
+        ungrouped.push(item);
+      }
+    }
+    return { batchGroups: groups, ungroupedSingles: ungrouped };
+  }, [personSingles]);
 
   // Activity counts across all person plans
   const allPersonItems = [...personPlans.flatMap(p => p.items), ...personSingles];
@@ -258,6 +345,41 @@ export function PipelineBoard({ plans: initialPlans, singles: initialSingles }: 
         )}
       </div>
 
+      {/* Filter bar */}
+      <div className="mb-3 flex flex-wrap items-center gap-1.5">
+        <button onClick={() => setActiveOnly(!activeOnly)}
+          className={`rounded-[6px] border px-2 py-1 text-[10px] font-semibold transition-colors ${
+            activeOnly
+              ? 'border-emerald-300 bg-emerald-50 text-emerald-700 dark:border-emerald-700 dark:bg-emerald-950/30 dark:text-emerald-300'
+              : 'border-[var(--border)] bg-[var(--card)] text-[var(--muted-foreground)]'
+          }`}>
+          Active now
+        </button>
+        <span className="text-[10px] text-[var(--muted-foreground)]">&middot;</span>
+        <button onClick={() => handleRepoFilter(null)}
+          className={`rounded-[6px] border px-2 py-1 text-[10px] font-semibold transition-colors ${
+            !repoFilter
+              ? 'border-[var(--primary)] bg-[var(--primary)]/10 text-[var(--primary)]'
+              : 'border-[var(--border)] bg-[var(--card)] text-[var(--muted-foreground)]'
+          }`}>
+          All
+        </button>
+        {availableRepos.map(repo => {
+          const cfg = REPO_CONFIG[repo] ?? { label: repo, bg: 'var(--color-stone-100)', text: 'var(--color-stone-600)' };
+          const active = repoFilter === repo;
+          return (
+            <button key={repo} onClick={() => handleRepoFilter(active ? null : repo)}
+              className="rounded-[6px] border px-2 py-1 text-[10px] font-semibold transition-colors"
+              style={active
+                ? { borderColor: cfg.text, background: cfg.bg, color: cfg.text }
+                : { borderColor: 'var(--border)', background: 'var(--card)', color: 'var(--muted-foreground)' }
+              }>
+              {cfg.label}
+            </button>
+          );
+        })}
+      </div>
+
       {/* ─── GRID VIEW ─── */}
       {!drillPlan && (
         <div>
@@ -276,7 +398,14 @@ export function PipelineBoard({ plans: initialPlans, singles: initialSingles }: 
               <div className="px-1 pb-1 pt-3 text-[9px] font-bold uppercase tracking-widest text-[var(--muted-foreground)]">
                 Individual Items ({personSingles.length})
               </div>
-              {personSingles.map(item => (
+              {Array.from(batchGroups.entries()).map(([batchId, items]) => {
+                const bt = batchTotals.get(batchId);
+                return (
+                  <BatchGroup key={batchId} batchId={batchId} items={items} person={person}
+                    totalCount={bt?.total ?? items.length} doneCount={bt?.done ?? 0} />
+                );
+              })}
+              {ungroupedSingles.map(item => (
                 <SingleRow key={item.id} item={item} person={person} />
               ))}
             </>
@@ -286,7 +415,7 @@ export function PipelineBoard({ plans: initialPlans, singles: initialSingles }: 
 
       {/* ─── DRILL VIEW ─── */}
       {drillPlan && (
-        <DrillView plan={drillPlan} person={person} onBack={() => setDrillId(null)} onReassign={handleReassign} />
+        <DrillView plan={drillPlan} person={person} onBack={() => setDrillId(null)} onReassign={handleReassign} batchTotals={batchTotals} />
       )}
     </div>
   );
@@ -394,6 +523,7 @@ function SingleRow({ item, person }: { item: PipelineItem; person: string }) {
   const sid = item.id.substring(0, 8).toUpperCase();
   const badge = statusBadge(item.status);
   const al = act ? actionLabel(item.status) : null;
+  const repoCfg = REPO_CONFIG[item.repo];
 
   return (
     <Link href={`/pipeline/${item.id}`}
@@ -402,6 +532,11 @@ function SingleRow({ item, person }: { item: PipelineItem; person: string }) {
       }`}>
       <span className="font-mono text-[11px] font-bold text-[var(--primary)]">{sid}</span>
       <span className="rounded-[4px] px-1 py-0.5 text-[8px] font-bold" style={{ background: badge.bg, color: badge.text }}>{badge.label}</span>
+      {repoCfg && (
+        <span className="rounded-[3px] px-1 py-0.5 text-[7px] font-semibold" style={{ background: repoCfg.bg, color: repoCfg.text }}>
+          {repoCfg.label}
+        </span>
+      )}
       <span className="min-w-0 flex-1 truncate text-[11px]">{item.title}</span>
       <span className="text-[9px] text-[var(--muted-foreground)]">{waitTime(item.updated_at)}</span>
       {al && (
@@ -411,9 +546,65 @@ function SingleRow({ item, person }: { item: PipelineItem; person: string }) {
   );
 }
 
+/* ─── Batch Group (collapsible) ─── */
+
+function BatchGroup({ batchId, items, person, totalCount, doneCount }: {
+  batchId: string; items: PipelineItem[]; person: string;
+  totalCount: number; doneCount: number;
+}) {
+  const [collapsed, setCollapsed] = useState(false);
+
+  return (
+    <div className="mb-2">
+      <button onClick={() => setCollapsed(!collapsed)}
+        className="mb-0.5 flex w-full items-center gap-2 rounded-[8px] border border-[var(--border)] bg-[var(--muted)] px-2.5 py-1.5 text-left">
+        <span className="text-[11px] font-bold">{formatBatchId(batchId)}</span>
+        <span className="text-[10px] text-[var(--muted-foreground)]">{doneCount}/{totalCount} complete</span>
+        <svg className={`ml-auto h-3 w-3 text-[var(--muted-foreground)] transition-transform ${collapsed ? '' : 'rotate-90'}`}
+          fill="none" viewBox="0 0 24 24" strokeWidth={2} stroke="currentColor">
+          <path strokeLinecap="round" strokeLinejoin="round" d="m8.25 4.5 7.5 7.5-7.5 7.5" />
+        </svg>
+      </button>
+      {!collapsed && items.map(item => (
+        <SingleRow key={item.id} item={item} person={person} />
+      ))}
+    </div>
+  );
+}
+
+/* ─── Drill Batch Group (uses DrillItem instead of SingleRow) ─── */
+
+function DrillBatchGroup({ batchId, items, person, totalCount, doneCount }: {
+  batchId: string; items: PipelineItem[]; person: string;
+  totalCount: number; doneCount: number;
+}) {
+  const [collapsed, setCollapsed] = useState(false);
+
+  return (
+    <div className="mb-2">
+      <button onClick={() => setCollapsed(!collapsed)}
+        className="mb-0.5 flex w-full items-center gap-2 rounded-[8px] border border-[var(--border)] bg-[var(--muted)] px-2.5 py-1.5 text-left">
+        <span className="text-[11px] font-bold">{formatBatchId(batchId)}</span>
+        <span className="text-[10px] text-[var(--muted-foreground)]">{doneCount}/{totalCount} complete</span>
+        <svg className={`ml-auto h-3 w-3 text-[var(--muted-foreground)] transition-transform ${collapsed ? '' : 'rotate-90'}`}
+          fill="none" viewBox="0 0 24 24" strokeWidth={2} stroke="currentColor">
+          <path strokeLinecap="round" strokeLinejoin="round" d="m8.25 4.5 7.5 7.5-7.5 7.5" />
+        </svg>
+      </button>
+      {!collapsed && items.map(item => (
+        <DrillItem key={item.id} item={item} person={person} />
+      ))}
+    </div>
+  );
+}
+
 /* ─── Drill View ─── */
 
-function DrillView({ plan, person, onBack, onReassign }: { plan: BuildPlan; person: string; onBack: () => void; onReassign: (componentId: string, newOwner: string) => void }) {
+function DrillView({ plan, person, onBack, onReassign, batchTotals }: {
+  plan: BuildPlan; person: string; onBack: () => void;
+  onReassign: (componentId: string, newOwner: string) => void;
+  batchTotals: Map<string, { total: number; done: number }>;
+}) {
   const s = calcPlan(plan.items, person);
   const [showOwnerPicker, setShowOwnerPicker] = useState(false);
   const [isPending, startTransition] = useTransition();
@@ -440,12 +631,29 @@ function DrillView({ plan, person, onBack, onReassign }: { plan: BuildPlan; pers
   // Group items by category
   const activeItems = plan.items.filter(i => !['cancelled', 'failed'].includes(i.status));
 
-  const actionItems = activeItems.filter(i => isAction(i.status, person));
-  const autoItems = activeItems.filter(i => isAutonomous(i.status));
-  const doneItems = activeItems.filter(i => DONE_STATUSES.includes(i.status));
-  const blockedItems = activeItems.filter(i => BLOCKED_STATUSES.includes(i.status));
-  const queueItems = activeItems.filter(i => QUEUE_STATUSES.includes(i.status) && !isAction(i.status, person));
-  const otherItems = activeItems.filter(i =>
+  // QA fix #2: separate batched items from non-batched for batch grouping
+  const { batchedGroups, unbatchedItems } = useMemo(() => {
+    const groups = new Map<string, PipelineItem[]>();
+    const unbatched: PipelineItem[] = [];
+    for (const item of activeItems) {
+      if (item.batch_id) {
+        const list = groups.get(item.batch_id) ?? [];
+        list.push(item);
+        groups.set(item.batch_id, list);
+      } else {
+        unbatched.push(item);
+      }
+    }
+    return { batchedGroups: groups, unbatchedItems: unbatched };
+  }, [activeItems]);
+
+  // Categorize only non-batched items
+  const actionItems = unbatchedItems.filter(i => isAction(i.status, person));
+  const autoItems = unbatchedItems.filter(i => isAutonomous(i.status));
+  const doneItems = unbatchedItems.filter(i => DONE_STATUSES.includes(i.status));
+  const blockedItems = unbatchedItems.filter(i => BLOCKED_STATUSES.includes(i.status));
+  const queueItems = unbatchedItems.filter(i => QUEUE_STATUSES.includes(i.status) && !isAction(i.status, person));
+  const otherItems = unbatchedItems.filter(i =>
     !isAction(i.status, person) && !isAutonomous(i.status) &&
     !DONE_STATUSES.includes(i.status) && !BLOCKED_STATUSES.includes(i.status) &&
     !QUEUE_STATUSES.includes(i.status)
@@ -523,6 +731,19 @@ function DrillView({ plan, person, onBack, onReassign }: { plan: BuildPlan; pers
           ))}
         </div>
       </div>
+
+      {/* ── BATCH GROUPS (QA fix #2: component-backed batches get headers) ── */}
+      {batchedGroups.size > 0 && (
+        <>
+          {Array.from(batchedGroups.entries()).map(([batchId, items]) => {
+            const bt = batchTotals.get(batchId);
+            return (
+              <DrillBatchGroup key={batchId} batchId={batchId} items={items} person={person}
+                totalCount={bt?.total ?? items.length} doneCount={bt?.done ?? 0} />
+            );
+          })}
+        </>
+      )}
 
       {/* ── ACTION NEEDED ── */}
       {actionItems.length > 0 && (
