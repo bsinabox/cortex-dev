@@ -15,6 +15,19 @@ Deno.serve(async (req) => {
   try {
     const supabaseUrl = Deno.env.get("SUPABASE_URL")!;
     const serviceKey = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!;
+
+    const authHeader = req.headers.get("authorization") ?? "";
+    const token = authHeader.replace(/^Bearer\s+/i, "");
+    if (!token || token !== serviceKey) {
+      return new Response(
+        JSON.stringify({ error: "Unauthorized" }),
+        {
+          status: 401,
+          headers: { ...corsHeaders, "Content-Type": "application/json" },
+        },
+      );
+    }
+
     const supabase = createClient(supabaseUrl, serviceKey);
 
     let payload;
@@ -34,6 +47,23 @@ Deno.serve(async (req) => {
 
     const title = typeof rawTitle === "string" ? rawTitle.slice(0, 200) : undefined;
     const body = typeof rawBody === "string" ? rawBody.slice(0, 1000) : undefined;
+
+    if (user_ids !== undefined) {
+      if (!Array.isArray(user_ids) || user_ids.length > 100 ||
+          !user_ids.every((id: unknown) => typeof id === "string" && /^[0-9a-f-]{36}$/i.test(id))) {
+        return new Response(
+          JSON.stringify({ error: "Invalid user_ids" }),
+          {
+            status: 400,
+            headers: { ...corsHeaders, "Content-Type": "application/json" },
+          },
+        );
+      }
+    }
+
+    const safeUrl = (typeof url === "string" && url.startsWith("/") && !url.startsWith("//"))
+      ? url.slice(0, 500)
+      : "/pipeline";
 
     const { data: configRows } = await supabase
       .from("agentic_config")
@@ -102,7 +132,7 @@ Deno.serve(async (req) => {
       title: title || "Cortex",
       body: body || "",
       data: {
-        url: url || "/pipeline",
+        url: safeUrl,
         priority: priority || "normal",
         status: status || null,
         item_sid: item_sid || null,
