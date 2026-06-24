@@ -22,7 +22,14 @@ BEGIN
   SELECT value INTO v_edge_url
     FROM agentic_config WHERE key = 'supabase_edge_function_url';
   IF v_edge_url IS NULL THEN
-    v_edge_url := current_setting('app.supabase_url', true) || '/functions/v1/push-notify';
+    v_edge_url := current_setting('app.supabase_url', true);
+    IF v_edge_url IS NOT NULL THEN
+      v_edge_url := v_edge_url || '/functions/v1/push-notify';
+    END IF;
+  END IF;
+  IF v_edge_url IS NULL THEN
+    RAISE LOG 'check_stale_pipeline_items: no edge function URL configured — set supabase_edge_function_url in agentic_config';
+    RETURN;
   END IF;
 
   SELECT value INTO v_service_key
@@ -60,15 +67,16 @@ BEGIN
       )
     );
 
-    INSERT INTO agentic_ops_log (class, fingerprint, kind, title, detail, severity, status)
+    INSERT INTO agentic_ops_log (class, fingerprint, kind, title, detail, severity, status, repo)
     VALUES (
-      'cortex',
+      'push_notification',
       'stale-item-' || v_item.id::text,
       'event',
       'Stale alert: ' || v_sid,
       'Item in status "' || v_item.status || '" since ' || v_item.updated_at::text,
       'warning',
-      'resolved'
+      'resolved',
+      'cortex-dev'
     );
   END LOOP;
 END;
