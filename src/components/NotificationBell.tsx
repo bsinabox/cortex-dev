@@ -27,17 +27,28 @@ const SEV_DOT: Record<string, string> = {
   critical: '#dc2626',
 };
 
+const SEEN_AT_KEY = 'cortex-notif-seen-at';
+
+function loadSeenAt(): string | null {
+  try { return localStorage.getItem(SEEN_AT_KEY); } catch { return null; }
+}
+
+function saveSeenAt(value: string) {
+  try { localStorage.setItem(SEEN_AT_KEY, value); } catch { /* ignore */ }
+}
+
 /* ─── Component ─── */
 
 export function NotificationBell() {
   const [open, setOpen] = useState(false);
   const [notifications, setNotifications] = useState<Notification[]>([]);
-  const [seenAt, setSeenAt] = useState<string | null>(null);
+  const [seenAt, setSeenAt] = useState<string | null>(loadSeenAt);
   const panelRef = useRef<HTMLDivElement>(null);
+  const supabaseRef = useRef(createBrowserClient());
 
   // Fetch notifications
   const fetchNotifications = useCallback(async () => {
-    const supabase = createBrowserClient();
+    const supabase = supabaseRef.current;
 
     // Recent ops_log entries (last 24h, most impactful)
     const cutoff = new Date(Date.now() - 24 * 3600_000).toISOString();
@@ -132,8 +143,13 @@ export function NotificationBell() {
     : notifications.length;
 
   // Mark all as seen
+  const markSeen = useCallback((ts: string) => {
+    setSeenAt(ts);
+    saveSeenAt(ts);
+  }, []);
+
   const clearAll = () => {
-    setSeenAt(new Date().toISOString());
+    markSeen(new Date().toISOString());
     setOpen(false);
   };
 
@@ -144,8 +160,7 @@ export function NotificationBell() {
         onClick={() => {
           setOpen(!open);
           if (!open && unreadCount > 0) {
-            // Mark as seen when opening
-            setSeenAt(new Date().toISOString());
+            markSeen(new Date().toISOString());
           }
         }}
         className="relative flex h-9 w-9 items-center justify-center rounded-[8px] border border-[var(--border)] bg-[var(--card)] transition-colors hover:bg-[var(--muted)] active:bg-[var(--muted)]"

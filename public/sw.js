@@ -28,6 +28,11 @@ self.addEventListener('fetch', (event) => {
   // Skip non-GET and cross-origin
   if (request.method !== 'GET' || url.origin !== self.location.origin) return;
 
+  // Auth/push API calls — always network, never cache
+  if (url.pathname.startsWith('/api/auth/') || url.pathname.startsWith('/api/push/')) {
+    return;
+  }
+
   // API calls — network first, cache fallback
   if (url.pathname.startsWith('/api/') || url.pathname.startsWith('/_next/data/')) {
     event.respondWith(

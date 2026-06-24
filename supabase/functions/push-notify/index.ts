@@ -109,11 +109,9 @@ Deno.serve(async (req) => {
     const { data: subscriptions, error: subErr } = await query;
 
     if (subErr) {
+      console.error("Failed to fetch subscriptions:", subErr.message);
       return new Response(
-        JSON.stringify({
-          error: "Failed to fetch subscriptions",
-          detail: subErr.message,
-        }),
+        JSON.stringify({ error: "Failed to fetch subscriptions" }),
         {
           status: 500,
           headers: { ...corsHeaders, "Content-Type": "application/json" },
@@ -215,8 +213,8 @@ Deno.serve(async (req) => {
       { headers: { ...corsHeaders, "Content-Type": "application/json" } },
     );
   } catch (err: unknown) {
-    const errMsg = err instanceof Error ? err.message : String(err);
-    return new Response(JSON.stringify({ error: errMsg }), {
+    console.error("push-notify error:", err);
+    return new Response(JSON.stringify({ error: "Internal server error" }), {
       status: 500,
       headers: { ...corsHeaders, "Content-Type": "application/json" },
     });
