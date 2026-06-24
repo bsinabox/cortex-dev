@@ -33,5 +33,5 @@ export async function sendPushNotification(payload: PushPayload): Promise<{
     throw new Error(`push-notify edge function failed (${res.status}): ${text}`);
   }
 
-  return res.json();
+  return await res.json();
 }

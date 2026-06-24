@@ -29,6 +29,10 @@ export async function POST(request: NextRequest) {
       return NextResponse.json({ error: 'Invalid subscription' }, { status: 400 });
     }
 
+    if (typeof endpoint !== 'string' || typeof keys.p256dh !== 'string' || typeof keys.auth !== 'string') {
+      return NextResponse.json({ error: 'Invalid subscription' }, { status: 400 });
+    }
+
     if (endpoint.length > 2048 || keys.p256dh.length > 256 || keys.auth.length > 256) {
       return NextResponse.json({ error: 'Input too long' }, { status: 400 });
     }
@@ -88,8 +92,12 @@ export async function DELETE(request: NextRequest) {
 
     const { endpoint } = body as { endpoint?: string };
 
-    if (!endpoint) {
+    if (!endpoint || typeof endpoint !== 'string') {
       return NextResponse.json({ error: 'endpoint is required' }, { status: 400 });
+    }
+
+    if (endpoint.length > 2048) {
+      return NextResponse.json({ error: 'endpoint too long' }, { status: 400 });
     }
 
     const { error } = await supabase
