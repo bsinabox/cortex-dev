@@ -1,4 +1,4 @@
-import { NextRequest, NextResponse } from 'next/server';
+import { type NextRequest, NextResponse } from 'next/server';
 import { createServerClient } from '@/lib/supabase/server';
 import { getUserRole } from '@/lib/auth';
 
@@ -21,6 +21,15 @@ export async function POST(request: NextRequest) {
 
     if (!endpoint || !keys?.p256dh || !keys?.auth) {
       return NextResponse.json({ error: 'Invalid subscription' }, { status: 400 });
+    }
+
+    try {
+      const parsed = new URL(endpoint);
+      if (parsed.protocol !== 'https:') {
+        return NextResponse.json({ error: 'Endpoint must use HTTPS' }, { status: 400 });
+      }
+    } catch {
+      return NextResponse.json({ error: 'Invalid endpoint URL' }, { status: 400 });
     }
 
     const { error } = await supabase
@@ -47,6 +56,40 @@ export async function POST(request: NextRequest) {
     return NextResponse.json({ status: 'subscribed' });
   } catch (err) {
     console.error('Push subscribe error:', err);
+    return NextResponse.json({ error: 'Internal error' }, { status: 500 });
+  }
+}
+
+export async function DELETE(request: NextRequest) {
+  try {
+    const supabase = await createServerClient();
+    const { data: { user } } = await supabase.auth.getUser();
+
+    if (!user) {
+      return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
+    }
+
+    const body = await request.json();
+    const { endpoint } = body;
+
+    if (!endpoint) {
+      return NextResponse.json({ error: 'endpoint is required' }, { status: 400 });
+    }
+
+    const { error } = await supabase
+      .from('cortex_dev_push_subscriptions')
+      .update({ active: false })
+      .eq('user_id', user.id)
+      .eq('endpoint', endpoint);
+
+    if (error) {
+      console.error('Push unsubscribe error:', error);
+      return NextResponse.json({ error: 'Failed to unsubscribe' }, { status: 500 });
+    }
+
+    return NextResponse.json({ status: 'unsubscribed' });
+  } catch (err) {
+    console.error('Push unsubscribe error:', err);
     return NextResponse.json({ error: 'Internal error' }, { status: 500 });
   }
 }

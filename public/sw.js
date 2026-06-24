@@ -1,14 +1,12 @@
 /// <reference lib="webworker" />
 
 const CACHE_NAME = 'cortex-dev-v1';
-const STATIC_ASSETS = ['/', '/pipeline', '/workers', '/approvals', '/health'];
 
-// Install — cache shell
+// Install — skip waiting (no pre-cache of SSR routes — they require auth)
 self.addEventListener('install', (event) => {
   event.waitUntil(
-    caches.open(CACHE_NAME).then((cache) => cache.addAll(STATIC_ASSETS))
+    caches.open(CACHE_NAME).then(() => self.skipWaiting())
   );
-  self.skipWaiting();
 });
 
 // Activate — clean old caches
@@ -61,18 +59,27 @@ self.addEventListener('fetch', (event) => {
 self.addEventListener('push', (event) => {
   if (!event.data) return;
 
-  const payload = event.data.json();
-  const { title, body, data, tag } = payload;
-
   event.waitUntil(
-    self.registration.showNotification(title || 'Cortex Dev', {
-      body: body || '',
-      icon: '/icons/icon-192.png',
-      badge: '/icons/icon-192.png',
-      tag: tag || 'cortex-dev',
-      data: data || {},
-      requireInteraction: data?.priority === 'high',
-    })
+    (async () => {
+      try {
+        const payload = event.data.json();
+        const { title, body, data, tag } = payload;
+        await self.registration.showNotification(title || 'Cortex Dev', {
+          body: body || '',
+          icon: '/icons/icon-192.png',
+          badge: '/icons/icon-192.png',
+          tag: tag || 'cortex-dev',
+          data: data || {},
+          requireInteraction: data?.priority === 'high',
+        });
+      } catch (err) {
+        console.error('[SW] Push parse error:', err);
+        await self.registration.showNotification('Cortex Dev', {
+          body: 'New notification',
+          icon: '/icons/icon-192.png',
+        });
+      }
+    })()
   );
 });
 

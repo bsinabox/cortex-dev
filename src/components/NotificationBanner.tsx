@@ -2,7 +2,7 @@
 
 import { useState, useEffect, useCallback } from 'react';
 
-const VAPID_PUBLIC_KEY = 'BH95YWTCxZux2kbm8RLUaZp3kpgw8TuzW_JNyExtHnTOdcNnDWx-aXH8Q_LCrtI9TEYfbzron3O-xNqgh49ugYA';
+const VAPID_PUBLIC_KEY = process.env.NEXT_PUBLIC_VAPID_PUBLIC_KEY ?? '';
 
 type PushState = 'loading' | 'unsupported' | 'prompt' | 'subscribing' | 'subscribed' | 'denied';
 
@@ -30,6 +30,11 @@ export function NotificationBanner() {
       return;
     }
 
+    if (!VAPID_PUBLIC_KEY) {
+      setState('unsupported');
+      return;
+    }
+
     try {
       if (sessionStorage.getItem('cortex-push-dismissed')) {
         setDismissed(true);
@@ -48,7 +53,7 @@ export function NotificationBanner() {
       if (existing) {
         setState('subscribed');
       } else {
-        await doSubscribe();
+        await registerSubscription();
       }
       return;
     }
@@ -56,15 +61,9 @@ export function NotificationBanner() {
     setState('prompt');
   }
 
-  const doSubscribe = useCallback(async () => {
+  async function registerSubscription() {
     setState('subscribing');
     try {
-      const permission = await Notification.requestPermission();
-      if (permission !== 'granted') {
-        setState('denied');
-        return;
-      }
-
       const reg = await navigator.serviceWorker.ready;
       const appServerKey = urlBase64ToUint8Array(VAPID_PUBLIC_KEY);
       const subscription = await reg.pushManager.subscribe({
@@ -89,6 +88,21 @@ export function NotificationBanner() {
         console.error('[Push] Subscribe API failed:', await response.text());
         setState('prompt');
       }
+    } catch (err) {
+      console.error('[Push] Subscribe error:', err);
+      setState('prompt');
+    }
+  }
+
+  const doSubscribe = useCallback(async () => {
+    setState('subscribing');
+    try {
+      const permission = await Notification.requestPermission();
+      if (permission !== 'granted') {
+        setState('denied');
+        return;
+      }
+      await registerSubscription();
     } catch (err) {
       console.error('[Push] Subscribe error:', err);
       setState('prompt');

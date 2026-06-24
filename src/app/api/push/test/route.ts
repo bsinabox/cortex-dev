@@ -31,7 +31,6 @@ export async function POST() {
     return NextResponse.json({ status: 'ok', ...result });
   } catch (err) {
     console.error('Push test error:', err);
-    const message = err instanceof Error ? err.message : 'Internal error';
-    return NextResponse.json({ error: message }, { status: 500 });
+    return NextResponse.json({ error: 'Push test failed' }, { status: 500 });
   }
 }
