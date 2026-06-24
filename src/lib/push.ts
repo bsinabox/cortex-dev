@@ -29,8 +29,9 @@ export async function sendPushNotification(payload: PushPayload): Promise<{
   });
 
   if (!res.ok) {
-    const text = await res.text();
-    throw new Error(`push-notify edge function failed (${res.status}): ${text}`);
+    const text = await res.text().catch(() => '');
+    console.error(`push-notify edge function failed (${res.status}):`, text);
+    throw new Error(`push-notify failed with status ${res.status}`);
   }
 
   return await res.json();

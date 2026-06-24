@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, useEffect, useCallback } from 'react';
+import { useState, useEffect, useCallback, useRef } from 'react';
 
 const VAPID_PUBLIC_KEY = process.env.NEXT_PUBLIC_VAPID_PUBLIC_KEY ?? '';
 
@@ -10,6 +10,7 @@ export function NotificationBanner() {
   const [state, setState] = useState<PushState>('loading');
   const [dismissed, setDismissed] = useState(false);
   const [showConfirm, setShowConfirm] = useState(false);
+  const subscribing = useRef(false);
 
   useEffect(() => {
     checkState();
@@ -67,13 +68,15 @@ export function NotificationBanner() {
   }
 
   const registerSubscription = useCallback(async () => {
+    if (subscribing.current) return;
+    subscribing.current = true;
     setState('subscribing');
     try {
       const reg = await navigator.serviceWorker.ready;
       const appServerKey = urlBase64ToUint8Array(VAPID_PUBLIC_KEY);
       const subscription = await reg.pushManager.subscribe({
         userVisibleOnly: true,
-        applicationServerKey: appServerKey.buffer as ArrayBuffer,
+        applicationServerKey: appServerKey.buffer.slice(0) as ArrayBuffer,
       });
 
       const json = subscription.toJSON();
@@ -96,6 +99,8 @@ export function NotificationBanner() {
     } catch (err) {
       console.error('[Push] Subscribe error:', err);
       setState('prompt');
+    } finally {
+      subscribing.current = false;
     }
   }, []);
 
