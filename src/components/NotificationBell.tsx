@@ -163,7 +163,7 @@ export function NotificationBell() {
             markSeen(new Date().toISOString());
           }
         }}
-        className="relative flex h-9 w-9 items-center justify-center rounded-[8px] border border-[var(--border)] bg-[var(--card)] transition-colors hover:bg-[var(--muted)] active:bg-[var(--muted)]"
+        className="relative flex h-12 w-12 items-center justify-center rounded-[8px] border border-[var(--border)] bg-[var(--card)] transition-colors hover:bg-[var(--muted)] active:bg-[var(--muted)] lg:h-9 lg:w-9"
         aria-label={`Notifications${unreadCount > 0 ? ` (${unreadCount} unread)` : ''}`}
       >
         <svg className="h-[18px] w-[18px] text-[var(--muted-foreground)]" fill="none" viewBox="0 0 24 24" strokeWidth={1.5} stroke="currentColor">

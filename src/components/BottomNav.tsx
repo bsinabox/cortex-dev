@@ -68,7 +68,7 @@ export function BottomNav({ approvalCount }: BottomNavProps) {
             <Link
               key={tab.href}
               href={tab.href}
-              className={`relative flex flex-col items-center gap-0.5 px-3 py-1.5 text-xs transition-colors ${
+              className={`relative flex h-full min-w-[48px] flex-col items-center justify-center gap-0.5 px-3 py-1.5 text-xs transition-colors ${
                 isActive
                   ? 'text-[var(--primary)] font-medium'
                   : 'text-[var(--muted-foreground)]'
