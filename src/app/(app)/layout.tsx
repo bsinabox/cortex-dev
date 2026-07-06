@@ -40,7 +40,7 @@ export default async function AppLayout({
       />
 
       {/* Main content — offset for sidebar on desktop */}
-      <main className="pb-[var(--bottom-nav-height)] lg:pb-0 lg:pl-60">
+      <main className="pb-[calc(var(--bottom-nav-height)_+_env(safe-area-inset-bottom))] lg:pb-0 lg:pl-60">
         {/* Mobile header bar */}
         <div className="sticky top-0 z-30 flex items-center justify-between border-b border-[var(--border)] bg-[var(--card)] px-4 py-2 lg:hidden">
           <div className="flex items-center gap-2">
