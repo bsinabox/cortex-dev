@@ -103,8 +103,9 @@ const SEVERITY_BADGE: Record<string, { bg: string; text: string; border: string 
 };
 
 const SCAN_STATUS_DOT: Record<string, string> = {
-  completed: 'bg-emerald-500',
+  complete: 'bg-emerald-500',
   running: 'bg-blue-500 animate-pulse',
+  partial: 'bg-amber-500',
   failed: 'bg-red-500',
   timeout: 'bg-amber-500',
 };
@@ -203,7 +204,7 @@ export function CvlHealthDashboard({
                   onClick={() => setSeverityFilter(sev)}
                   className={`rounded-[6px] border px-2 py-1 text-[11px] capitalize transition-colors ${
                     active
-                      ? 'border-[var(--primary)] bg-[var(--primary)] bg-opacity-10 text-[var(--primary)] font-medium'
+                      ? 'border-[var(--primary)] bg-[var(--primary)]/10 text-[var(--primary)] font-medium'
                       : 'border-[var(--border)] text-[var(--muted-foreground)] hover:bg-[var(--muted)]'
                   }`}
                 >
