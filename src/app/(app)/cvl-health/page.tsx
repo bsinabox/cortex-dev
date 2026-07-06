@@ -27,7 +27,7 @@ export default async function CvlHealthPage() {
       .limit(25),
     service
       .from('cvl_findings')
-      .select('id, category, module, check_name, severity, status, title, detail, suggested_action, auto_healable, first_seen, last_seen, created_at')
+      .select('id, category, module, check_name, severity, status, title, detail, suggested_action, item_id, item_sid, auto_healable, first_seen, last_seen, created_at')
       // Open findings only — mirror conductor-cvl.js OPEN_FINDING_FILTER
       // (status not in resolved, wont_fix). A plain neq('status','resolved')
       // would still count wont_fix rows as open.
