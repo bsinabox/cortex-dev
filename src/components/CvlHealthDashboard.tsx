@@ -45,6 +45,8 @@ export type CvlFindingRow = {
   title: string;
   detail: string | null;
   suggested_action: string | null;
+  item_id: string | null;
+  item_sid: string | null;
   auto_healable: boolean | null;
   first_seen: string | null;
   last_seen: string | null;
@@ -234,8 +236,22 @@ export function CvlHealthDashboard({
               <tbody className="divide-y divide-[var(--border)]">
                 {visibleFindings.map((f) => {
                   const badge = SEVERITY_BADGE[f.severity] ?? SEVERITY_BADGE.low;
+                  // Findings that reference a pipeline item link through to its detail
+                  // page; findings without an item_id stay static (no dead links).
+                  const href = f.item_id ? `/pipeline/${f.item_id}` : null;
+                  const go = () => { if (href) router.push(href); };
                   return (
-                    <tr key={f.id}>
+                    <tr
+                      key={f.id}
+                      onClick={href ? go : undefined}
+                      onKeyDown={href ? (e) => {
+                        if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); go(); }
+                      } : undefined}
+                      role={href ? 'link' : undefined}
+                      tabIndex={href ? 0 : undefined}
+                      title={href ? `Open pipeline item ${f.item_sid ?? ''}`.trim() : undefined}
+                      className={href ? 'cursor-pointer transition-colors hover:bg-[var(--muted)] focus:bg-[var(--muted)] focus:outline-none' : undefined}
+                    >
                       <td className="whitespace-nowrap px-4 py-2">
                         <span
                           className="inline-flex rounded-[4px] border px-1.5 py-0.5 text-[10px] font-bold uppercase"
@@ -253,8 +269,11 @@ export function CvlHealthDashboard({
                       <td className="max-w-md px-4 py-2 text-xs" title={f.detail ?? undefined}>
                         <span className="font-medium">{f.title}</span>
                         {f.suggested_action && (
-                          <span className="mt-0.5 block truncate text-[11px] text-[var(--muted-foreground)]">
-                            → {f.suggested_action}
+                          <span className="mt-1 flex items-center gap-1 truncate text-[11px]">
+                            <span className="text-[var(--muted-foreground)]">→</span>
+                            <span className="rounded-[4px] bg-[var(--primary)]/10 px-1.5 py-0.5 font-mono font-medium text-[var(--primary)]">
+                              {f.suggested_action}
+                            </span>
                           </span>
                         )}
                       </td>
