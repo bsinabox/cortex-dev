@@ -2,7 +2,7 @@
 
 import { useState, useTransition } from 'react';
 import { useRouter } from 'next/navigation';
-import { approveItem, requestChanges } from '../actions';
+import { approveItem, requestChanges, promoteToProd } from '../actions';
 
 interface ItemDetailActionsProps {
   itemId: string;
@@ -12,7 +12,7 @@ interface ItemDetailActionsProps {
   needsAction: boolean;
 }
 
-const APPROVABLE = new Set(['human_review', 'testing_in_dev', 'design_review_hold', 'promotion_review']);
+const APPROVABLE = new Set(['human_review', 'testing_in_dev', 'design_review_hold', 'promotion_review', 'awaiting_prod_promotion']);
 const CHANGEABLE = new Set(['human_review', 'testing_in_dev', 'design_review_hold']);
 
 export function ItemDetailActions({ itemId, sid: _sid, status, bootPrompt, needsAction: _needsAction }: ItemDetailActionsProps) {
@@ -28,7 +28,7 @@ export function ItemDetailActions({ itemId, sid: _sid, status, bootPrompt, needs
 
   const handleApprove = () => {
     startTransition(async () => {
-      const res = await approveItem(itemId);
+      const res = status === 'awaiting_prod_promotion' ? await promoteToProd(itemId) : await approveItem(itemId);
       if (res.ok) {
         setActionResult({ type: 'success', msg: 'Approved \u2014 advancing to next phase' });
         router.refresh();
@@ -103,7 +103,7 @@ export function ItemDetailActions({ itemId, sid: _sid, status, bootPrompt, needs
             disabled={pending}
             className="rounded-[8px] bg-emerald-600 px-4 py-2 text-sm font-semibold text-white transition-opacity active:opacity-80 disabled:opacity-50"
           >
-            {pending ? 'Processing\u2026' : approveLabel}
+            {pending ? 'Processing\u2026' : (status === 'awaiting_prod_promotion' ? 'Promote to Prod' : approveLabel)}
           </button>
         )}
 
