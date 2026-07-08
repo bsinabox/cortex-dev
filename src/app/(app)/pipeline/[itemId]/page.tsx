@@ -73,7 +73,7 @@ export default async function ItemDetailPage(props: { params: Promise<{ itemId: 
   const isBlocked = BLOCKED_STATUSES.includes(item.status);
 
   // Action-needed check
-  const actionStatuses = new Set(['human_review', 'testing_in_dev', 'design_review_hold', 'promotion_review']);
+  const actionStatuses = new Set(['human_review', 'testing_in_dev', 'design_review_hold', 'promotion_review', 'awaiting_prod_promotion']);
   const needsAction = actionStatuses.has(item.status);
 
   // Fetch related data
