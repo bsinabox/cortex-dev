@@ -75,8 +75,10 @@ function isAutonomous(status: string): boolean {
 
 const SCOTT_ACTS = new Set(['testing_in_dev', 'awaiting_hub_design', 'intake', 'designing', 'cross_review', 'design_conflict']);
 const BRIAN_ACTS = new Set(['human_review', 'design_review_hold', 'promotion_review', 'awaiting_prod_promotion']);
-// Etta is a cross-cutting PM (see-all + act): her action set is the union of every human gate.
-const ETTA_ACTS = new Set([...SCOTT_ACTS, ...BRIAN_ACTS]);
+// Etta owns nothing by default: items are only hers if explicitly assigned to 'etta'.
+const ETTA_ACTS = new Set<string>();
+// Every human-gate status across the team — used for the "All" filter's action bucket.
+const ANY_ACTS = new Set([...SCOTT_ACTS, ...BRIAN_ACTS]);
 
 function actsFor(person: string): Set<string> {
   if (person === 'brian') return BRIAN_ACTS;
@@ -87,6 +89,15 @@ function actsFor(person: string): Set<string> {
 function isAction(status: string, person: string): boolean {
   return actsFor(person).has(status);
 }
+
+// Action test that respects the "All" filter (any human gate) vs. a single person.
+function isActionForFilter(status: string, person: string): boolean {
+  if (person === 'all') return ANY_ACTS.has(status);
+  return isAction(status, person);
+}
+
+// Display order for the top "Needs your action" bucket, grouped by actionLabel().text.
+const ACTION_ORDER = ['Start design', 'Approve design', 'Verify on dev', 'Promote → UAT', '2nd approval → prod'];
 
 function calcPlan(items: PipelineItem[], person: string) {
   const t = items.length;
@@ -201,22 +212,44 @@ export function PipelineBoard({ plans: initialPlans, singles: initialSingles, cu
   // Filter by person — "all" shows everything (the visibility safety net so nothing is hidden).
   const isAll = person === 'all';
   const personPlans = isAll ? livePlans : livePlans.filter(p => p.component.owner === person);
+  // All singles visible for this filter (still includes DONE — split out below).
   const personSingles = liveSingles.filter(i => {
     if (['cancelled', 'failed'].includes(i.status)) return false;
     if (isAll) return true;
-    return isAction(i.status, person) ||
+    return isActionForFilter(i.status, person) ||
       // Autonomous / no-gate items have no owner — surface them under the operator (Scott) view.
       (!SCOTT_ACTS.has(i.status) && !BRIAN_ACTS.has(i.status) && person === 'scott');
   });
+
+  // FIX 1: a plan whose active (non-cancelled/failed) items are ALL done drops out of the
+  // main "Build Progress" list into the collapsed "Completed" section at the bottom.
+  const planIsComplete = (plan: BuildPlan) => {
+    const active = plan.items.filter(i => !['cancelled', 'failed'].includes(i.status));
+    return active.length > 0 && active.every(i => DONE_STATUSES.includes(i.status));
+  };
+  const activePlans = personPlans.filter(p => !planIsComplete(p));
+  const completedPlans = personPlans.filter(planIsComplete);
+
+  // FIX 1: DONE single items never appear in the active list — they go to Completed.
+  const completedSingles = personSingles.filter(i => DONE_STATUSES.includes(i.status));
+  const activeSingles = personSingles.filter(i => !DONE_STATUSES.includes(i.status));
+  // Action singles are surfaced in the top bucket; the "Individual Items" list shows the rest.
+  const nonActionSingles = activeSingles.filter(i => !isActionForFilter(i.status, person));
+
+  // FIX 2: the top "Needs your action" bucket — the SAME computation as the header count,
+  // spanning plan items + singles for the current filter person.
+  const actionItems = [...personPlans.flatMap(p => p.items), ...personSingles]
+    .filter(i => isActionForFilter(i.status, person));
 
   // Drill target
   const drillPlan = drillId ? personPlans.find(p => p.component.id === drillId) ?? null : null;
 
   // Activity counts across all person plans
-  const allPersonItems = [...personPlans.flatMap(p => p.items), ...personSingles];
+  const allPersonItems = [...personPlans.flatMap(p => p.items), ...activeSingles];
   const bldCount = allPersonItems.filter(i => ['approved', 'executing'].includes(i.status)).length;
   const qaCount = allPersonItems.filter(i => i.status === 'qa').length;
-  const actCount = allPersonItems.filter(i => isAction(i.status, person)).length;
+  // Reconciled with the "Needs your action" section: same list, same count.
+  const actCount = actionItems.length;
 
   // Owner reassignment handler
   const handleReassign = useCallback(async (componentId: string, newOwner: string) => {
@@ -289,25 +322,40 @@ export function PipelineBoard({ plans: initialPlans, singles: initialSingles, cu
       {/* ─── GRID VIEW ─── */}
       {!drillPlan && (
         <div>
-          {personPlans.map(plan => (
+          {/* ── NEEDS YOUR ACTION (top bucket, grouped by action) ── */}
+          {actionItems.length > 0 && (
+            <NeedsActionSection items={actionItems} />
+          )}
+
+          {activePlans.map(plan => (
             <PlanCard key={plan.component.id} plan={plan} person={person} onDrill={() => setDrillId(plan.component.id)} />
           ))}
 
-          {personPlans.length === 0 && (
+          {activePlans.length === 0 && actionItems.length === 0 && nonActionSingles.length === 0 && (
             <div className="rounded-[10px] border border-dashed border-[var(--border)] p-8 text-center">
               <p className="text-sm text-[var(--muted-foreground)]">No active build plans for {whoLabel}</p>
             </div>
           )}
 
-          {personSingles.length > 0 && (
+          {nonActionSingles.length > 0 && (
             <>
               <div className="px-1 pb-1 pt-3 text-[9px] font-bold uppercase tracking-widest text-[var(--muted-foreground)]">
-                Individual Items ({personSingles.length})
+                Individual Items ({nonActionSingles.length})
               </div>
-              {personSingles.map(item => (
+              {nonActionSingles.map(item => (
                 <SingleRow key={item.id} item={item} person={person} />
               ))}
             </>
+          )}
+
+          {/* ── COMPLETED (collapsed, bottom) ── */}
+          {(completedPlans.length + completedSingles.length) > 0 && (
+            <CompletedSection
+              plans={completedPlans}
+              singles={completedSingles}
+              person={person}
+              onDrill={(id) => setDrillId(id)}
+            />
           )}
         </div>
       )}
@@ -436,6 +484,93 @@ function SingleRow({ item, person }: { item: PipelineItem; person: string }) {
         <span className="rounded-[5px] px-2 py-0.5 text-[9px] font-bold text-white" style={{ background: al.bg }}>{al.text}</span>
       )}
     </Link>
+  );
+}
+
+/* ─── Needs-your-action bucket (top of grid, grouped by action) ─── */
+
+function NeedsActionSection({ items }: { items: PipelineItem[] }) {
+  // Group by the human-readable action label (Start design / Approve design / …).
+  const groups = new Map<string, { al: { text: string; bg: string }; items: PipelineItem[] }>();
+  for (const item of items) {
+    const al = actionLabel(item.status);
+    if (!al) continue;
+    const g = groups.get(al.text) ?? { al, items: [] };
+    g.items.push(item);
+    groups.set(al.text, g);
+  }
+  const ordered = [
+    ...ACTION_ORDER.filter(t => groups.has(t)).map(t => groups.get(t)!),
+    ...[...groups.entries()].filter(([t]) => !ACTION_ORDER.includes(t)).map(([, g]) => g),
+  ];
+
+  return (
+    <div className="mb-3 rounded-[12px] border border-red-200 bg-red-50 p-3 dark:border-red-900 dark:bg-red-950/30">
+      <div className="mb-2 flex items-center gap-1.5">
+        <span className="inline-block h-2 w-2 shrink-0 rounded-full bg-red-500" />
+        <span className="text-[10px] font-bold uppercase tracking-widest text-red-500">
+          Needs your action ({items.length})
+        </span>
+      </div>
+      {ordered.map(g => (
+        <div key={g.al.text} className="mb-2 last:mb-0">
+          <div className="mb-0.5 px-1 text-[9px] font-bold uppercase tracking-wider" style={{ color: g.al.bg }}>
+            {g.al.text} ({g.items.length})
+          </div>
+          {g.items.map(item => (
+            <ActionRow key={item.id} item={item} al={g.al} />
+          ))}
+        </div>
+      ))}
+    </div>
+  );
+}
+
+function ActionRow({ item, al }: { item: PipelineItem; al: { text: string; bg: string } }) {
+  const sid = item.id.substring(0, 8).toUpperCase();
+  return (
+    <Link href={`/pipeline/${item.id}`}
+      className="mb-0.5 flex items-center gap-1.5 rounded-[8px] border border-red-200 bg-[var(--card)] px-2.5 py-2 transition-colors active:border-[var(--primary)] dark:border-red-900">
+      <span className="font-mono text-[11px] font-bold text-[var(--primary)]">{sid}</span>
+      <span className="min-w-0 flex-1 truncate text-[11px]">{item.title}</span>
+      <span className="shrink-0 rounded-[5px] px-2 py-0.5 text-[9px] font-bold text-white" style={{ background: al.bg }}>{al.text}</span>
+    </Link>
+  );
+}
+
+/* ─── Completed section (collapsed, bottom of grid) ─── */
+
+function CompletedSection({ plans, singles, person, onDrill }: {
+  plans: BuildPlan[]; singles: PipelineItem[]; person: string; onDrill: (componentId: string) => void;
+}) {
+  const [open, setOpen] = useState(false);
+  const count = plans.length + singles.length;
+
+  return (
+    <div className="mt-4">
+      <button
+        onClick={() => setOpen(!open)}
+        className="mb-1 flex w-full items-center gap-1.5 px-1 py-1 text-left"
+      >
+        <span className="inline-block h-2 w-2 shrink-0 rounded-full bg-emerald-500" />
+        <span className="text-[10px] font-bold uppercase tracking-widest text-emerald-600 dark:text-emerald-400">
+          Completed ({count})
+        </span>
+        <svg className={`ml-auto h-3 w-3 text-[var(--muted-foreground)] transition-transform ${open ? 'rotate-90' : ''}`} fill="none" viewBox="0 0 24 24" strokeWidth={2} stroke="currentColor">
+          <path strokeLinecap="round" strokeLinejoin="round" d="m8.25 4.5 7.5 7.5-7.5 7.5" />
+        </svg>
+      </button>
+      {open && (
+        <div className="opacity-70">
+          {plans.map(plan => (
+            <PlanCard key={plan.component.id} plan={plan} person={person} onDrill={() => onDrill(plan.component.id)} />
+          ))}
+          {singles.map(item => (
+            <SingleRow key={item.id} item={item} person={person} />
+          ))}
+        </div>
+      )}
+    </div>
   );
 }
 
