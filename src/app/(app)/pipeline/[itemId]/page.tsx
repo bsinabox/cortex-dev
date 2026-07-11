@@ -52,7 +52,7 @@ export default async function ItemDetailPage(props: { params: Promise<{ itemId: 
 
   const { data: rawItem, error } = await supabase
     .from('agentic_items')
-    .select('id, title, status, priority, repo, current_round, execution_policy, created_at, updated_at, escalated_at, escalation_reason, escalation_evidence_id, final_design_summary')
+    .select('id, title, status, priority, repo, current_round, execution_policy, created_at, updated_at, escalated_at, escalation_reason, escalation_evidence_id, final_design_summary, ticket_ref')
     .eq('id', itemId)
     .single();
 
@@ -64,6 +64,19 @@ export default async function ItemDetailPage(props: { params: Promise<{ itemId: 
   const priority = PRIORITY_CONFIG[item.priority] ?? PRIORITY_CONFIG.p3;
   const repo = REPO_CONFIG[item.repo] ?? { label: item.repo, bg: 'var(--color-stone-100)', text: 'var(--color-stone-600)' };
   const statusLabel = STATUS_LABELS[item.status] ?? item.status;
+
+  // Canonical KerTec ticket (linked via agentic_items.ticket_ref → tickets.ref).
+  const ticketRef: string | null = item.ticket_ref ?? null;
+  let ticket: { ref: string; subject: string | null; capability: string | null; priority: string | null; client_status: string | null } | null = null;
+  if (ticketRef) {
+    const { data: ticketData } = await supabase
+      .from('tickets')
+      .select('ref, subject, capability, priority, client_status')
+      .eq('ref', ticketRef)
+      .single();
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    ticket = (ticketData as any) ?? null;
+  }
 
   // Determine pipeline phase state for chevron
   const phases = getPhasesForPolicy(item.execution_policy);
@@ -188,6 +201,51 @@ export default async function ItemDetailPage(props: { params: Promise<{ itemId: 
           <span>Round {item.current_round}</span>
         </div>
       </div>
+
+      {/* ── KerTec ticket ── */}
+      {ticketRef ? (
+        <div className="mt-3 rounded-[10px] border border-[var(--border)] bg-[var(--card)] p-3 sm:p-4">
+          <p className="text-[9px] font-bold uppercase tracking-widest text-[var(--muted-foreground)]">KerTec Ticket</p>
+          <div className="mt-1.5 flex flex-wrap items-center gap-2">
+            <span className="inline-flex items-center rounded-[6px] bg-indigo-100 px-2 py-0.5 font-mono text-xs font-bold text-indigo-700 dark:bg-indigo-950 dark:text-indigo-300">
+              {ticket?.ref ?? ticketRef}
+            </span>
+            {ticket?.subject && (
+              <span className="min-w-0 text-sm font-medium">{ticket.subject}</span>
+            )}
+          </div>
+          {(ticket?.capability || ticket?.client_status) && (
+            <div className="mt-2 flex flex-wrap gap-1.5">
+              {ticket?.capability && (
+                <span className="inline-flex items-center gap-1 rounded-[5px] bg-[var(--muted)] px-1.5 py-0.5 text-[10px] text-[var(--muted-foreground)]">
+                  <span className="font-medium">Capability</span>
+                  <span>{ticket.capability}</span>
+                </span>
+              )}
+              {ticket?.client_status && (
+                <span className="inline-flex items-center gap-1 rounded-[5px] bg-[var(--muted)] px-1.5 py-0.5 text-[10px] text-[var(--muted-foreground)]">
+                  <span className="font-medium">Client status</span>
+                  <span>{ticket.client_status}</span>
+                </span>
+              )}
+              {ticket?.priority && (
+                <span className="inline-flex items-center gap-1 rounded-[5px] bg-[var(--muted)] px-1.5 py-0.5 text-[10px] text-[var(--muted-foreground)]">
+                  <span className="font-medium">Priority</span>
+                  <span>{ticket.priority}</span>
+                </span>
+              )}
+            </div>
+          )}
+          {!ticket && (
+            <p className="mt-1.5 text-[11px] text-[var(--muted-foreground)]">Ticket {ticketRef} not found.</p>
+          )}
+        </div>
+      ) : (
+        <div className="mt-3 flex items-center gap-1.5 px-1 text-[11px] text-[var(--muted-foreground)]">
+          <span className="inline-block h-1.5 w-1.5 rounded-full bg-[var(--muted-foreground)] opacity-40" />
+          No linked ticket
+        </div>
+      )}
 
       {/* ── Chevron progress bar ── */}
       <div className="mt-3 rounded-[10px] border border-[var(--border)] bg-[var(--card)] px-3 py-2.5 sm:px-4">

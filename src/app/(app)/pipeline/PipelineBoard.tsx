@@ -562,6 +562,20 @@ function AssigneePicker({ item, onAssign }: {
   );
 }
 
+/* ─── Ticket chip (canonical KerTec ticket ref, e.g. "F6") ─── */
+// Non-interactive span — safe to render inside a <Link> alongside the SID.
+function TicketChip({ ticketRef }: { ticketRef: string | null }) {
+  if (!ticketRef) return null;
+  return (
+    <span
+      title={`KerTec ticket ${ticketRef}`}
+      className="shrink-0 rounded-[4px] bg-indigo-100 px-1 py-0.5 font-mono text-[8px] font-bold text-indigo-700 dark:bg-indigo-950 dark:text-indigo-300"
+    >
+      {ticketRef}
+    </span>
+  );
+}
+
 /* ─── Single item row ─── */
 
 function SingleRow({ item, person, onAssign }: { item: PipelineItem; person: string; onAssign: (itemId: string, assignee: string | null) => void }) {
@@ -580,6 +594,7 @@ function SingleRow({ item, person, onAssign }: { item: PipelineItem; person: str
       }`}>
       <Link href={`/pipeline/${item.id}`} className="flex min-w-0 flex-1 items-center gap-1.5">
         <span className="font-mono text-[11px] font-bold text-[var(--primary)]">{sid}</span>
+        <TicketChip ticketRef={item.ticket_ref} />
         <span className="rounded-[4px] px-1 py-0.5 text-[8px] font-bold" style={{ background: badge.bg, color: badge.text }}>{badge.label}</span>
         <span className="min-w-0 flex-1 truncate text-[11px]">{item.title}</span>
         <span className="text-[9px] text-[var(--muted-foreground)]">{waitTime(item.updated_at)}</span>
@@ -639,6 +654,7 @@ function ActionRow({ item, al, onAssign }: { item: PipelineItem; al: { text: str
     <div className="mb-0.5 flex items-center gap-1.5 rounded-[8px] border border-red-200 bg-[var(--card)] px-2.5 py-2 transition-colors active:border-[var(--primary)] dark:border-red-900">
       <Link href={`/pipeline/${item.id}`} className="flex min-w-0 flex-1 items-center gap-1.5">
         <span className="font-mono text-[11px] font-bold text-[var(--primary)]">{sid}</span>
+        <TicketChip ticketRef={item.ticket_ref} />
         <span className="min-w-0 flex-1 truncate text-[11px]">{item.title}</span>
       </Link>
       <AssigneePicker item={item} onAssign={onAssign} />
@@ -930,6 +946,7 @@ function DrillItem({ item, person, onAssign }: { item: PipelineItem; person: str
       <div className="flex cursor-pointer items-center gap-1.5 px-2.5 py-2 active:bg-[var(--muted)]" onClick={() => setExpanded(!expanded)}>
         <Link href={`/pipeline/${item.id}`} onClick={e => e.stopPropagation()}
           className="font-mono text-[11px] font-bold text-[var(--primary)]">{sid}</Link>
+        <TicketChip ticketRef={item.ticket_ref} />
         <span className="rounded-[4px] px-1 py-0.5 text-[8px] font-bold" style={{ background: badge.bg, color: badge.text }}>{badge.label}</span>
         {round > 0 && (
           <span className={`rounded-[3px] px-1 py-0.5 text-[8px] font-bold ${round >= 3 ? 'bg-red-100 text-red-700 dark:bg-red-900 dark:text-red-300' : round >= 2 ? 'bg-amber-100 text-amber-700 dark:bg-amber-900 dark:text-amber-300' : 'bg-[var(--muted)] text-[var(--muted-foreground)]'}`}>
