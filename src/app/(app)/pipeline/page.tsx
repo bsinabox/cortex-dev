@@ -1,5 +1,6 @@
 import { createServerClient } from '@/lib/supabase/server';
 import { PipelineBoard } from './PipelineBoard';
+import { getUserKey } from '@/lib/auth';
 import type { PipelineItem } from '@/components/ItemCard';
 
 export const dynamic = 'force-dynamic';
@@ -20,6 +21,9 @@ export type BuildPlan = {
 
 export default async function PipelinePage() {
   const supabase = await createServerClient();
+
+  const { data: { user } } = await supabase.auth.getUser();
+  const currentUser = (user ? getUserKey(user.id) : null) ?? 'scott';
 
   const { data: components, error: compErr } = await supabase
     .from('build_components')
@@ -95,7 +99,7 @@ export default async function PipelinePage() {
 
   return (
     <div>
-      <PipelineBoard plans={plans} singles={singles} />
+      <PipelineBoard plans={plans} singles={singles} currentUser={currentUser} />
     </div>
   );
 }

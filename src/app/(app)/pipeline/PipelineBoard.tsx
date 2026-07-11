@@ -31,6 +31,7 @@ type BuildPlan = {
 const TEAM_MEMBERS = [
   { key: 'scott', label: 'Scott' },
   { key: 'brian', label: 'Brian' },
+  { key: 'etta', label: 'Etta' },
 ];
 
 /* ─── Status badge config ─── */
@@ -73,10 +74,18 @@ function isAutonomous(status: string): boolean {
 /* ─── Helpers ─── */
 
 const SCOTT_ACTS = new Set(['testing_in_dev', 'awaiting_hub_design', 'intake', 'designing', 'cross_review', 'design_conflict']);
-const BRIAN_ACTS = new Set(['human_review', 'design_review_hold', 'promotion_review']);
+const BRIAN_ACTS = new Set(['human_review', 'design_review_hold', 'promotion_review', 'awaiting_prod_promotion']);
+// Etta is a cross-cutting PM (see-all + act): her action set is the union of every human gate.
+const ETTA_ACTS = new Set([...SCOTT_ACTS, ...BRIAN_ACTS]);
+
+function actsFor(person: string): Set<string> {
+  if (person === 'brian') return BRIAN_ACTS;
+  if (person === 'etta') return ETTA_ACTS;
+  return SCOTT_ACTS;
+}
 
 function isAction(status: string, person: string): boolean {
-  return person === 'scott' ? SCOTT_ACTS.has(status) : BRIAN_ACTS.has(status);
+  return actsFor(person).has(status);
 }
 
 function calcPlan(items: PipelineItem[], person: string) {
@@ -98,21 +107,24 @@ function calcPlan(items: PipelineItem[], person: string) {
 }
 
 function actionLabel(status: string): { text: string; bg: string } | null {
-  if (status === 'testing_in_dev') return { text: 'Test', bg: '#0f766e' };
-  if (status === 'human_review' || status === 'design_review_hold') return { text: 'Ship', bg: '#059669' };
-  if (status === 'promotion_review') return { text: 'Promote', bg: '#7c3aed' };
+  if (status === 'testing_in_dev') return { text: 'Verify on dev', bg: '#0f766e' };
+  if (status === 'human_review' || status === 'design_review_hold') return { text: 'Approve design', bg: '#059669' };
+  if (status === 'promotion_review') return { text: 'Promote → UAT', bg: '#7c3aed' };
+  if (status === 'awaiting_prod_promotion') return { text: '2nd approval → prod', bg: '#9d174d' };
+  if (status === 'awaiting_hub_design' || status === 'intake') return { text: 'Start design', bg: '#475569' };
   return null;
 }
 
 function statusHint(status: string): string {
   const hints: Record<string, string> = {
-    human_review: 'Approve or request changes', testing_in_dev: 'Verify on dev then promote',
-    design_review_hold: 'Review QA findings', approved: 'Queued for worker — autonomous',
+    human_review: 'Approve or request changes', testing_in_dev: 'Verify on dev, then accept',
+    design_review_hold: 'Review QA findings, then approve', approved: 'Queued for worker — autonomous',
     executing: 'Building right now — autonomous', qa: 'Running QA checks — autonomous',
     cross_review: 'Codex reviewing — autonomous', designing: 'Design in progress — autonomous',
     readiness_blocked: 'Waiting on dependencies', blocked: 'Needs intervention',
-    awaiting_hub_design: 'Needs design session', done: 'Completed — no action needed',
-    cancelled: 'Cancelled — no action needed',
+    awaiting_hub_design: 'Needs a design session', intake: 'Needs a design session',
+    promotion_review: 'Promote dev → UAT', awaiting_prod_promotion: 'Needs a 2nd approver to promote to prod',
+    done: 'Completed — no action needed', cancelled: 'Cancelled — no action needed',
   };
   return hints[status] ?? status;
 }
@@ -122,17 +134,26 @@ function statusHint(status: string): string {
 interface PipelineBoardProps {
   plans: BuildPlan[];
   singles: PipelineItem[];
+  currentUser: string;
 }
 
 const PULL_THRESHOLD = 80;
 
-export function PipelineBoard({ plans: initialPlans, singles: initialSingles }: PipelineBoardProps) {
+export function PipelineBoard({ plans: initialPlans, singles: initialSingles, currentUser }: PipelineBoardProps) {
   const { data: allItems, refresh } = useRealtimeTable<PipelineItem>('agentic_items', [
     ...initialPlans.flatMap(p => p.items),
     ...initialSingles,
   ]);
 
-  const [person, setPerson] = useState<'scott' | 'brian'>('scott');
+  // Filter is the logged-in user by default ("Mine"), any other team member, or "all".
+  const [person, setPerson] = useState<string>(currentUser);
+
+  // Human-readable subject for the active filter ("you" / "the team" / a teammate's name).
+  const whoLabel = person === 'all'
+    ? 'the team'
+    : person === currentUser
+      ? 'you'
+      : (TEAM_MEMBERS.find(m => m.key === person)?.label ?? person);
   const [drillId, setDrillId] = useState<string | null>(null);
 
   // Track component owners locally for optimistic updates
@@ -177,11 +198,14 @@ export function PipelineBoard({ plans: initialPlans, singles: initialSingles }: 
     return { livePlans: lp, liveSingles: sng };
   }, [allItems, initialPlans, ownerOverrides]);
 
-  // Filter by person
-  const personPlans = livePlans.filter(p => p.component.owner === person);
+  // Filter by person — "all" shows everything (the visibility safety net so nothing is hidden).
+  const isAll = person === 'all';
+  const personPlans = isAll ? livePlans : livePlans.filter(p => p.component.owner === person);
   const personSingles = liveSingles.filter(i => {
     if (['cancelled', 'failed'].includes(i.status)) return false;
+    if (isAll) return true;
     return isAction(i.status, person) ||
+      // Autonomous / no-gate items have no owner — surface them under the operator (Scott) view.
       (!SCOTT_ACTS.has(i.status) && !BRIAN_ACTS.has(i.status) && person === 'scott');
   });
 
@@ -223,12 +247,16 @@ export function PipelineBoard({ plans: initialPlans, singles: initialSingles }: 
       <div className="mb-2 flex items-center gap-2">
         <h1 className="flex-1 text-xl font-semibold tracking-tight lg:text-2xl">Pipeline</h1>
         <div className="flex overflow-hidden rounded-[8px] border border-[var(--border)]">
-          {(['scott', 'brian'] as const).map(p => (
-            <button key={p} onClick={() => { setPerson(p); setDrillId(null); }}
+          {[
+            { key: currentUser, label: 'Mine' },
+            ...TEAM_MEMBERS.filter(m => m.key !== currentUser),
+            { key: 'all', label: 'All' },
+          ].map(opt => (
+            <button key={opt.key} onClick={() => { setPerson(opt.key); setDrillId(null); }}
               className={`px-3 py-1.5 text-[11px] font-semibold transition-colors ${
-                person === p ? 'bg-[var(--primary)] text-white' : 'bg-[var(--background)] text-[var(--muted-foreground)]'
+                person === opt.key ? 'bg-[var(--primary)] text-white' : 'bg-[var(--background)] text-[var(--muted-foreground)]'
               }`}>
-              {p === 'scott' ? 'Mine' : 'Brian'}
+              {opt.label}
             </button>
           ))}
         </div>
@@ -253,7 +281,7 @@ export function PipelineBoard({ plans: initialPlans, singles: initialSingles }: 
         )}
         {actCount > 0 && (
           <span className="ml-auto shrink-0 font-semibold text-red-500">
-            {actCount} waiting on {person === 'scott' ? 'you' : 'Brian'}
+            {actCount} waiting on {whoLabel}
           </span>
         )}
       </div>
@@ -267,7 +295,7 @@ export function PipelineBoard({ plans: initialPlans, singles: initialSingles }: 
 
           {personPlans.length === 0 && (
             <div className="rounded-[10px] border border-dashed border-[var(--border)] p-8 text-center">
-              <p className="text-sm text-[var(--muted-foreground)]">No active build plans for {person === 'scott' ? 'you' : 'Brian'}</p>
+              <p className="text-sm text-[var(--muted-foreground)]">No active build plans for {whoLabel}</p>
             </div>
           )}
 
@@ -369,7 +397,7 @@ function PlanCard({ plan, person, onDrill }: { plan: BuildPlan; person: string; 
         <div className="mt-1.5 flex items-center gap-2 rounded-[6px] border border-red-200 bg-red-50 px-2 py-1.5 dark:border-red-900 dark:bg-red-950/30">
           <span className="text-[14px] font-extrabold text-red-500">{s.acts}</span>
           <span className="text-[10px] text-red-400">
-            item{s.acts > 1 ? 's' : ''} waiting on {person === 'scott' ? 'you' : 'Brian'}
+            item{s.acts > 1 ? 's' : ''} need action
           </span>
         </div>
       )}
