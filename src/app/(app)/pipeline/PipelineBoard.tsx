@@ -168,10 +168,14 @@ interface PipelineBoardProps {
 const PULL_THRESHOLD = 80;
 
 export function PipelineBoard({ plans: initialPlans, singles: initialSingles, currentUser }: PipelineBoardProps) {
-  const { data: allItems, refresh } = useRealtimeTable<PipelineItem>('agentic_items', [
-    ...initialPlans.flatMap(p => p.items),
-    ...initialSingles,
-  ]);
+  // Memoize so internal re-renders (filter/drill/optimistic state) don't hand the
+  // realtime hook a fresh array literal every render, which would reset live data
+  // and stack up re-renders that starve router.push navigation transitions.
+  const initialItems = useMemo(
+    () => [...initialPlans.flatMap(p => p.items), ...initialSingles],
+    [initialPlans, initialSingles]
+  );
+  const { data: allItems, refresh } = useRealtimeTable<PipelineItem>('agentic_items', initialItems);
 
   // Filter is the logged-in user by default ("Mine"), any other team member, or "all".
   const [person, setPerson] = useState<string>(currentUser);
