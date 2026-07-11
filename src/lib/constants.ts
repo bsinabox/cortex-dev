@@ -189,6 +189,23 @@ export const PRIORITY_CONFIG: Record<string, { bg: string; text: string; label: 
   p3: { bg: 'var(--color-stone-100)', text: 'var(--color-stone-500)', label: 'P3' },
 };
 
+// ── Tickets (client ticket registry) ──
+// Client tickets carry free-text priorities (Urgent/High/Medium/Low), distinct
+// from the pipeline's p0–p3 scheme, so they get their own pill config.
+export const TICKET_PRIORITY_CONFIG: Record<string, { bg: string; text: string; label: string }> = {
+  Urgent: { bg: '#FEE2E2', text: '#991B1B', label: 'Urgent' },
+  High:   { bg: '#FEF3C7', text: '#92400E', label: 'High' },
+  Medium: { bg: '#DBEAFE', text: '#1E40AF', label: 'Medium' },
+  Low:    { bg: 'var(--color-stone-100)', text: 'var(--color-stone-500)', label: 'Low' },
+};
+
+// Ticket coverage_status → badge config (uncovered = the gap, shown first)
+export const COVERAGE_STATUS_CONFIG: Record<string, { bg: string; text: string; label: string; dot: string }> = {
+  uncovered:   { bg: '#FEE2E2', text: '#991B1B', label: 'Uncovered',   dot: '#EF4444' },
+  in_progress: { bg: '#DBEAFE', text: '#1E40AF', label: 'In progress', dot: '#3B82F6' },
+  resolved:    { bg: '#D1FAE5', text: '#065F46', label: 'Resolved',    dot: '#10B981' },
+};
+
 // Repo display config
 export const REPO_CONFIG: Record<string, { label: string; bg: string; text: string }> = {
   'kertec-field-app-v2': { label: 'KerTec', bg: '#DBEAFE', text: '#1E40AF' },
