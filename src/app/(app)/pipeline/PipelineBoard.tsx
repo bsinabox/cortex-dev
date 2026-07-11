@@ -4,7 +4,7 @@ import { useState, useMemo, useCallback, useRef, useTransition } from 'react';
 import Link from 'next/link';
 import { useRealtimeTable } from '@/hooks/useRealtimeTable';
 import { type PipelineItem } from '@/components/ItemCard';
-import { reassignComponent } from './actions';
+import { reassignComponent, reassignItem } from './actions';
 import {
   PIPELINE_PHASES, getPhaseIndex, getPhaseForStatus, getPhasesForPolicy,
   QUEUE_STATUSES, BLOCKED_STATUSES, DONE_STATUSES, waitTime,
@@ -96,6 +96,23 @@ function isActionForFilter(status: string, person: string): boolean {
   return isAction(status, person);
 }
 
+// Ownership test: an EXPLICIT per-item assignee always wins over the status heuristic.
+// (person is a single teammate here — the "all" filter is handled separately as show-everything.)
+function itemBelongsTo(item: PipelineItem, person: string): boolean {
+  if (item.assignee) return item.assignee === person;
+  return isActionForFilter(item.status, person) ||
+    // Autonomous / no-gate items have no owner — surface them under the operator (Scott) view.
+    (!SCOTT_ACTS.has(item.status) && !BRIAN_ACTS.has(item.status) && person === 'scott');
+}
+
+// Is this item in `person`'s "Needs your action" bucket? Requires a real action label,
+// and honors explicit assignee (a Scott-owned item shows in Scott's bucket grouped by ITS action).
+function isPersonAction(item: PipelineItem, person: string): boolean {
+  if (actionLabel(item.status) == null) return false;
+  if (person === 'all') return isActionForFilter(item.status, 'all');
+  return itemBelongsTo(item, person);
+}
+
 // Display order for the top "Needs your action" bucket, grouped by actionLabel().text.
 const ACTION_ORDER = ['Start design', 'Approve design', 'Verify on dev', 'Promote → UAT', '2nd approval → prod'];
 
@@ -169,6 +186,8 @@ export function PipelineBoard({ plans: initialPlans, singles: initialSingles, cu
 
   // Track component owners locally for optimistic updates
   const [ownerOverrides, setOwnerOverrides] = useState<Record<string, string>>({});
+  // Track per-item assignees locally for optimistic updates (null = explicitly unassigned).
+  const [assigneeOverrides, setAssigneeOverrides] = useState<Record<string, string | null>>({});
 
   // Pull-to-refresh
   const [pullDist, setPullDist] = useState(0);
@@ -190,7 +209,11 @@ export function PipelineBoard({ plans: initialPlans, singles: initialSingles, cu
     const planItems = new Map<string, PipelineItem[]>();
     const sng: PipelineItem[] = [];
 
-    for (const item of allItems) {
+    for (const raw of allItems) {
+      // Apply optimistic assignee override, if any.
+      const item = Object.prototype.hasOwnProperty.call(assigneeOverrides, raw.id)
+        ? { ...raw, assignee: assigneeOverrides[raw.id] }
+        : raw;
       if (item.component_id && compMap.has(item.component_id)) {
         const list = planItems.get(item.component_id) ?? [];
         list.push(item);
@@ -207,7 +230,7 @@ export function PipelineBoard({ plans: initialPlans, singles: initialSingles, cu
     }
     lp.sort((a, b) => b.items.length - a.items.length);
     return { livePlans: lp, liveSingles: sng };
-  }, [allItems, initialPlans, ownerOverrides]);
+  }, [allItems, initialPlans, ownerOverrides, assigneeOverrides]);
 
   // Filter by person — "all" shows everything (the visibility safety net so nothing is hidden).
   const isAll = person === 'all';
@@ -216,9 +239,8 @@ export function PipelineBoard({ plans: initialPlans, singles: initialSingles, cu
   const personSingles = liveSingles.filter(i => {
     if (['cancelled', 'failed'].includes(i.status)) return false;
     if (isAll) return true;
-    return isActionForFilter(i.status, person) ||
-      // Autonomous / no-gate items have no owner — surface them under the operator (Scott) view.
-      (!SCOTT_ACTS.has(i.status) && !BRIAN_ACTS.has(i.status) && person === 'scott');
+    // Explicit assignee wins over the status heuristic (itemBelongsTo checks assignee first).
+    return itemBelongsTo(i, person);
   });
 
   // FIX 1: a plan whose active (non-cancelled/failed) items are ALL done drops out of the
@@ -234,12 +256,12 @@ export function PipelineBoard({ plans: initialPlans, singles: initialSingles, cu
   const completedSingles = personSingles.filter(i => DONE_STATUSES.includes(i.status));
   const activeSingles = personSingles.filter(i => !DONE_STATUSES.includes(i.status));
   // Action singles are surfaced in the top bucket; the "Individual Items" list shows the rest.
-  const nonActionSingles = activeSingles.filter(i => !isActionForFilter(i.status, person));
+  const nonActionSingles = activeSingles.filter(i => !isPersonAction(i, person));
 
   // FIX 2: the top "Needs your action" bucket — the SAME computation as the header count,
-  // spanning plan items + singles for the current filter person.
+  // spanning plan items + singles for the current filter person. Honors explicit assignee.
   const actionItems = [...personPlans.flatMap(p => p.items), ...personSingles]
-    .filter(i => isActionForFilter(i.status, person));
+    .filter(i => isPersonAction(i, person));
 
   // Drill target
   const drillPlan = drillId ? personPlans.find(p => p.component.id === drillId) ?? null : null;
@@ -259,6 +281,19 @@ export function PipelineBoard({ plans: initialPlans, singles: initialSingles, cu
       setOwnerOverrides(prev => {
         const next = { ...prev };
         delete next[componentId];
+        return next;
+      });
+    }
+  }, []);
+
+  // Per-item assignee reassignment handler (optimistic; rolls back on failure).
+  const handleAssign = useCallback(async (itemId: string, assignee: string | null) => {
+    setAssigneeOverrides(prev => ({ ...prev, [itemId]: assignee }));
+    const result = await reassignItem(itemId, assignee);
+    if (!result.ok) {
+      setAssigneeOverrides(prev => {
+        const next = { ...prev };
+        delete next[itemId];
         return next;
       });
     }
@@ -324,7 +359,7 @@ export function PipelineBoard({ plans: initialPlans, singles: initialSingles, cu
         <div>
           {/* ── NEEDS YOUR ACTION (top bucket, grouped by action) ── */}
           {actionItems.length > 0 && (
-            <NeedsActionSection items={actionItems} />
+            <NeedsActionSection items={actionItems} onAssign={handleAssign} />
           )}
 
           {activePlans.map(plan => (
@@ -343,7 +378,7 @@ export function PipelineBoard({ plans: initialPlans, singles: initialSingles, cu
                 Individual Items ({nonActionSingles.length})
               </div>
               {nonActionSingles.map(item => (
-                <SingleRow key={item.id} item={item} person={person} />
+                <SingleRow key={item.id} item={item} person={person} onAssign={handleAssign} />
               ))}
             </>
           )}
@@ -355,6 +390,7 @@ export function PipelineBoard({ plans: initialPlans, singles: initialSingles, cu
               singles={completedSingles}
               person={person}
               onDrill={(id) => setDrillId(id)}
+              onAssign={handleAssign}
             />
           )}
         </div>
@@ -362,7 +398,7 @@ export function PipelineBoard({ plans: initialPlans, singles: initialSingles, cu
 
       {/* ─── DRILL VIEW ─── */}
       {drillPlan && (
-        <DrillView plan={drillPlan} person={person} onBack={() => setDrillId(null)} onReassign={handleReassign} />
+        <DrillView plan={drillPlan} person={person} onBack={() => setDrillId(null)} onReassign={handleReassign} onAssign={handleAssign} />
       )}
     </div>
   );
@@ -463,9 +499,68 @@ function PlanCard({ plan, person, onDrill }: { plan: BuildPlan; person: string; 
   );
 }
 
+/* ─── Per-item assignee picker (badge → menu) ─── */
+
+function AssigneePicker({ item, onAssign }: {
+  item: PipelineItem;
+  onAssign: (itemId: string, assignee: string | null) => void;
+}) {
+  const [open, setOpen] = useState(false);
+  const current = item.assignee;
+  const label = current ? (TEAM_MEMBERS.find(m => m.key === current)?.label ?? current) : 'Assign';
+
+  // The picker lives inside clickable rows (Link / expand toggle) — swallow every click.
+  const swallow = (e: React.MouseEvent) => { e.preventDefault(); e.stopPropagation(); };
+
+  return (
+    <div className="relative shrink-0" onClick={swallow}>
+      <button
+        onClick={(e) => { swallow(e); setOpen(o => !o); }}
+        className={`flex items-center gap-1 rounded-[5px] border px-1.5 py-0.5 text-[9px] font-semibold transition-colors hover:border-[var(--primary)] ${
+          current
+            ? 'border-[var(--border)] bg-[var(--muted)] text-[var(--foreground)]'
+            : 'border-dashed border-[var(--border)] text-[var(--muted-foreground)]'
+        }`}
+      >
+        <svg className="h-2.5 w-2.5" fill="none" viewBox="0 0 24 24" strokeWidth={2} stroke="currentColor">
+          <path strokeLinecap="round" strokeLinejoin="round" d="M15.75 6a3.75 3.75 0 1 1-7.5 0 3.75 3.75 0 0 1 7.5 0ZM4.501 20.118a7.5 7.5 0 0 1 14.998 0" />
+        </svg>
+        {label}
+      </button>
+      {open && (
+        <div className="absolute right-0 top-full z-30 mt-1 min-w-[110px] overflow-hidden rounded-[8px] border border-[var(--border)] bg-[var(--card)] shadow-lg">
+          {TEAM_MEMBERS.map(m => (
+            <button
+              key={m.key}
+              onClick={(e) => { swallow(e); if (m.key !== current) onAssign(item.id, m.key); setOpen(false); }}
+              className={`flex w-full items-center gap-2 px-3 py-1.5 text-left text-[11px] transition-colors hover:bg-[var(--muted)] ${
+                m.key === current ? 'font-bold text-[var(--primary)]' : 'text-[var(--foreground)]'
+              }`}
+            >
+              {m.key === current ? (
+                <svg className="h-3 w-3 text-[var(--primary)]" fill="none" viewBox="0 0 24 24" strokeWidth={3} stroke="currentColor">
+                  <path strokeLinecap="round" strokeLinejoin="round" d="m4.5 12.75 6 6 9-13.5" />
+                </svg>
+              ) : <span className="w-3" />}
+              {m.label}
+            </button>
+          ))}
+          <button
+            onClick={(e) => { swallow(e); if (current) onAssign(item.id, null); setOpen(false); }}
+            className="flex w-full items-center gap-2 border-t border-[var(--border)] px-3 py-1.5 text-left text-[11px] text-[var(--muted-foreground)] transition-colors hover:bg-[var(--muted)]"
+          >
+            <span className="w-3" />
+            Unassign
+          </button>
+        </div>
+      )}
+    </div>
+  );
+}
+
 /* ─── Single item row ─── */
 
-function SingleRow({ item, person }: { item: PipelineItem; person: string }) {
+function SingleRow({ item, person, onAssign }: { item: PipelineItem; person: string; onAssign: (itemId: string, assignee: string | null) => void }) {
   const act = isAction(item.status, person);
   const sid = item.id.substring(0, 8).toUpperCase();
   const badge = statusBadge(item.status);
@@ -480,6 +575,7 @@ function SingleRow({ item, person }: { item: PipelineItem; person: string }) {
       <span className="rounded-[4px] px-1 py-0.5 text-[8px] font-bold" style={{ background: badge.bg, color: badge.text }}>{badge.label}</span>
       <span className="min-w-0 flex-1 truncate text-[11px]">{item.title}</span>
       <span className="text-[9px] text-[var(--muted-foreground)]">{waitTime(item.updated_at)}</span>
+      <AssigneePicker item={item} onAssign={onAssign} />
       {al && (
         <span className="rounded-[5px] px-2 py-0.5 text-[9px] font-bold text-white" style={{ background: al.bg }}>{al.text}</span>
       )}
@@ -489,7 +585,7 @@ function SingleRow({ item, person }: { item: PipelineItem; person: string }) {
 
 /* ─── Needs-your-action bucket (top of grid, grouped by action) ─── */
 
-function NeedsActionSection({ items }: { items: PipelineItem[] }) {
+function NeedsActionSection({ items, onAssign }: { items: PipelineItem[]; onAssign: (itemId: string, assignee: string | null) => void }) {
   // Group by the human-readable action label (Start design / Approve design / …).
   const groups = new Map<string, { al: { text: string; bg: string }; items: PipelineItem[] }>();
   for (const item of items) {
@@ -518,7 +614,7 @@ function NeedsActionSection({ items }: { items: PipelineItem[] }) {
             {g.al.text} ({g.items.length})
           </div>
           {g.items.map(item => (
-            <ActionRow key={item.id} item={item} al={g.al} />
+            <ActionRow key={item.id} item={item} al={g.al} onAssign={onAssign} />
           ))}
         </div>
       ))}
@@ -526,13 +622,14 @@ function NeedsActionSection({ items }: { items: PipelineItem[] }) {
   );
 }
 
-function ActionRow({ item, al }: { item: PipelineItem; al: { text: string; bg: string } }) {
+function ActionRow({ item, al, onAssign }: { item: PipelineItem; al: { text: string; bg: string }; onAssign: (itemId: string, assignee: string | null) => void }) {
   const sid = item.id.substring(0, 8).toUpperCase();
   return (
     <Link href={`/pipeline/${item.id}`}
       className="mb-0.5 flex items-center gap-1.5 rounded-[8px] border border-red-200 bg-[var(--card)] px-2.5 py-2 transition-colors active:border-[var(--primary)] dark:border-red-900">
       <span className="font-mono text-[11px] font-bold text-[var(--primary)]">{sid}</span>
       <span className="min-w-0 flex-1 truncate text-[11px]">{item.title}</span>
+      <AssigneePicker item={item} onAssign={onAssign} />
       <span className="shrink-0 rounded-[5px] px-2 py-0.5 text-[9px] font-bold text-white" style={{ background: al.bg }}>{al.text}</span>
     </Link>
   );
@@ -540,8 +637,9 @@ function ActionRow({ item, al }: { item: PipelineItem; al: { text: string; bg: s
 
 /* ─── Completed section (collapsed, bottom of grid) ─── */
 
-function CompletedSection({ plans, singles, person, onDrill }: {
+function CompletedSection({ plans, singles, person, onDrill, onAssign }: {
   plans: BuildPlan[]; singles: PipelineItem[]; person: string; onDrill: (componentId: string) => void;
+  onAssign: (itemId: string, assignee: string | null) => void;
 }) {
   const [open, setOpen] = useState(false);
   const count = plans.length + singles.length;
@@ -566,7 +664,7 @@ function CompletedSection({ plans, singles, person, onDrill }: {
             <PlanCard key={plan.component.id} plan={plan} person={person} onDrill={() => onDrill(plan.component.id)} />
           ))}
           {singles.map(item => (
-            <SingleRow key={item.id} item={item} person={person} />
+            <SingleRow key={item.id} item={item} person={person} onAssign={onAssign} />
           ))}
         </div>
       )}
@@ -576,7 +674,7 @@ function CompletedSection({ plans, singles, person, onDrill }: {
 
 /* ─── Drill View ─── */
 
-function DrillView({ plan, person, onBack, onReassign }: { plan: BuildPlan; person: string; onBack: () => void; onReassign: (componentId: string, newOwner: string) => void }) {
+function DrillView({ plan, person, onBack, onReassign, onAssign }: { plan: BuildPlan; person: string; onBack: () => void; onReassign: (componentId: string, newOwner: string) => void; onAssign: (itemId: string, assignee: string | null) => void }) {
   const s = calcPlan(plan.items, person);
   const [showOwnerPicker, setShowOwnerPicker] = useState(false);
   const [isPending, startTransition] = useTransition();
@@ -694,6 +792,7 @@ function DrillView({ plan, person, onBack, onReassign }: { plan: BuildPlan; pers
           color="#EF4444"
           items={actionItems}
           person={person}
+          onAssign={onAssign}
         />
       )}
 
@@ -706,6 +805,7 @@ function DrillView({ plan, person, onBack, onReassign }: { plan: BuildPlan; pers
           items={autoItems}
           person={person}
           subtitle="Hands off — conductor is working"
+          onAssign={onAssign}
         />
       )}
 
@@ -716,6 +816,7 @@ function DrillView({ plan, person, onBack, onReassign }: { plan: BuildPlan; pers
           color="#94A3B8"
           items={queueItems}
           person={person}
+          onAssign={onAssign}
         />
       )}
 
@@ -726,6 +827,7 @@ function DrillView({ plan, person, onBack, onReassign }: { plan: BuildPlan; pers
           color="#EF4444"
           items={blockedItems}
           person={person}
+          onAssign={onAssign}
         />
       )}
 
@@ -736,6 +838,7 @@ function DrillView({ plan, person, onBack, onReassign }: { plan: BuildPlan; pers
           color="#94A3B8"
           items={otherItems}
           person={person}
+          onAssign={onAssign}
         />
       )}
 
@@ -747,6 +850,7 @@ function DrillView({ plan, person, onBack, onReassign }: { plan: BuildPlan; pers
           items={doneItems}
           person={person}
           collapsed
+          onAssign={onAssign}
         />
       )}
     </div>
@@ -755,10 +859,11 @@ function DrillView({ plan, person, onBack, onReassign }: { plan: BuildPlan; pers
 
 /* ─── Item Section (collapsible group in drill view) ─── */
 
-function ItemSection({ label, color, pulse, items, person, subtitle, collapsed: defaultCollapsed }: {
+function ItemSection({ label, color, pulse, items, person, subtitle, collapsed: defaultCollapsed, onAssign }: {
   label: string; color: string; pulse?: boolean;
   items: PipelineItem[]; person: string;
   subtitle?: string; collapsed?: boolean;
+  onAssign: (itemId: string, assignee: string | null) => void;
 }) {
   const [collapsed, setCollapsed] = useState(defaultCollapsed ?? false);
 
@@ -779,7 +884,7 @@ function ItemSection({ label, color, pulse, items, person, subtitle, collapsed: 
         </svg>
       </button>
       {!collapsed && items.map(item => (
-        <DrillItem key={item.id} item={item} person={person} />
+        <DrillItem key={item.id} item={item} person={person} onAssign={onAssign} />
       ))}
     </div>
   );
@@ -787,7 +892,7 @@ function ItemSection({ label, color, pulse, items, person, subtitle, collapsed: 
 
 /* ─── Drill Item (expandable with chevron) ─── */
 
-function DrillItem({ item, person }: { item: PipelineItem; person: string }) {
+function DrillItem({ item, person, onAssign }: { item: PipelineItem; person: string; onAssign: (itemId: string, assignee: string | null) => void }) {
   const [expanded, setExpanded] = useState(false);
   const act = isAction(item.status, person);
   const auto = isAutonomous(item.status);
@@ -821,6 +926,7 @@ function DrillItem({ item, person }: { item: PipelineItem; person: string }) {
         )}
         <span className="min-w-0 flex-1 truncate text-[11px]">{item.title}</span>
         <span className="text-[9px] text-[var(--muted-foreground)]">{waitTime(item.updated_at)}</span>
+        <AssigneePicker item={item} onAssign={onAssign} />
         {al && (
           <span className="rounded-[5px] px-2 py-0.5 text-[9px] font-bold text-white" style={{ background: al.bg }}>{al.text}</span>
         )}

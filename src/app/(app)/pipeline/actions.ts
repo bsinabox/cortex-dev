@@ -240,6 +240,37 @@ export async function reassignComponent(
   return { ok: true };
 }
 
+/* ─── Per-item assignee reassignment ─── */
+
+export async function reassignItem(
+  itemId: string,
+  assignee: string | null
+): Promise<ActionResult> {
+  const user = await getAuthUser();
+  if (!user) return { ok: false, error: 'Not authenticated' };
+
+  // Operators + approver may set explicit item ownership.
+  const role = getUserRole(user.id);
+  if (!role) return { ok: false, error: 'Unauthorized' };
+
+  const supabase = await createServiceClient();
+
+  const { data: updated, error: updateErr } = await supabase
+    .from('agentic_items')
+    .update({ assignee } as Record<string, unknown>)
+    .eq('id', itemId)
+    .select('id, assignee');
+
+  if (updateErr) return { ok: false, error: updateErr.message };
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  if (!updated || (updated as any[]).length === 0) {
+    return { ok: false, error: 'Item not found or update rejected' };
+  }
+
+  revalidatePath('/pipeline');
+  return { ok: true };
+}
+
 export async function promoteToProd(itemId: string): Promise<ActionResult> {
   const user = await getAuthUser();
   if (!user) return { ok: false, error: 'Not authenticated' };

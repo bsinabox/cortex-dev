@@ -21,6 +21,7 @@ export type PipelineItem = {
   current_round: number;
   execution_policy: string | null;
   component_id: string | null;
+  assignee: string | null;
 };
 
 interface ItemCardProps {
