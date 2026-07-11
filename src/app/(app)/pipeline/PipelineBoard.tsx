@@ -566,20 +566,25 @@ function SingleRow({ item, person, onAssign }: { item: PipelineItem; person: str
   const badge = statusBadge(item.status);
   const al = act ? actionLabel(item.status) : null;
 
+  // A flex row (div) — the <Link> wraps ONLY the non-interactive content so the
+  // AssigneePicker's <button> is never a descendant of the anchor (invalid HTML
+  // that silently breaks App Router hydration and kills client navigation).
   return (
-    <Link href={`/pipeline/${item.id}`}
+    <div
       className={`mb-0.5 flex items-center gap-1.5 rounded-[8px] border px-2.5 py-2 transition-colors active:border-[var(--primary)] ${
         act ? 'border-red-200 bg-red-50 dark:border-red-900 dark:bg-red-950/40' : 'border-[var(--border)] bg-[var(--card)]'
       }`}>
-      <span className="font-mono text-[11px] font-bold text-[var(--primary)]">{sid}</span>
-      <span className="rounded-[4px] px-1 py-0.5 text-[8px] font-bold" style={{ background: badge.bg, color: badge.text }}>{badge.label}</span>
-      <span className="min-w-0 flex-1 truncate text-[11px]">{item.title}</span>
-      <span className="text-[9px] text-[var(--muted-foreground)]">{waitTime(item.updated_at)}</span>
+      <Link href={`/pipeline/${item.id}`} className="flex min-w-0 flex-1 items-center gap-1.5">
+        <span className="font-mono text-[11px] font-bold text-[var(--primary)]">{sid}</span>
+        <span className="rounded-[4px] px-1 py-0.5 text-[8px] font-bold" style={{ background: badge.bg, color: badge.text }}>{badge.label}</span>
+        <span className="min-w-0 flex-1 truncate text-[11px]">{item.title}</span>
+        <span className="text-[9px] text-[var(--muted-foreground)]">{waitTime(item.updated_at)}</span>
+      </Link>
       <AssigneePicker item={item} onAssign={onAssign} />
       {al && (
         <span className="rounded-[5px] px-2 py-0.5 text-[9px] font-bold text-white" style={{ background: al.bg }}>{al.text}</span>
       )}
-    </Link>
+    </div>
   );
 }
 
@@ -624,14 +629,17 @@ function NeedsActionSection({ items, onAssign }: { items: PipelineItem[]; onAssi
 
 function ActionRow({ item, al, onAssign }: { item: PipelineItem; al: { text: string; bg: string }; onAssign: (itemId: string, assignee: string | null) => void }) {
   const sid = item.id.substring(0, 8).toUpperCase();
+  // Flex row (div); the <Link> wraps only non-interactive content so the
+  // AssigneePicker <button> stays outside the anchor (see SingleRow note).
   return (
-    <Link href={`/pipeline/${item.id}`}
-      className="mb-0.5 flex items-center gap-1.5 rounded-[8px] border border-red-200 bg-[var(--card)] px-2.5 py-2 transition-colors active:border-[var(--primary)] dark:border-red-900">
-      <span className="font-mono text-[11px] font-bold text-[var(--primary)]">{sid}</span>
-      <span className="min-w-0 flex-1 truncate text-[11px]">{item.title}</span>
+    <div className="mb-0.5 flex items-center gap-1.5 rounded-[8px] border border-red-200 bg-[var(--card)] px-2.5 py-2 transition-colors active:border-[var(--primary)] dark:border-red-900">
+      <Link href={`/pipeline/${item.id}`} className="flex min-w-0 flex-1 items-center gap-1.5">
+        <span className="font-mono text-[11px] font-bold text-[var(--primary)]">{sid}</span>
+        <span className="min-w-0 flex-1 truncate text-[11px]">{item.title}</span>
+      </Link>
       <AssigneePicker item={item} onAssign={onAssign} />
       <span className="shrink-0 rounded-[5px] px-2 py-0.5 text-[9px] font-bold text-white" style={{ background: al.bg }}>{al.text}</span>
-    </Link>
+    </div>
   );
 }
 
