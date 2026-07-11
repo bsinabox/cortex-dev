@@ -21,77 +21,32 @@ self.addEventListener('activate', (event) => {
   );
 });
 
-// Fetch — network-first for API, cache-first for static
+// Fetch — cache-first ONLY for immutable, content-hashed static assets.
+// Everything else (documents, RSC/_next/data, prefetch, /api) passes straight
+// to the network with NO respondWith so the SW never interferes with the
+// App Router. Handling navigation/RSC here served cached HTML in place of RSC
+// flight data, which silently killed all <Link>/router.push navigation.
 self.addEventListener('fetch', (event) => {
   const { request } = event;
   const url = new URL(request.url);
 
-  // Skip non-GET and cross-origin
+  // Only same-origin GET; never touch navigations, RSC, pages, data, or API.
   if (request.method !== 'GET' || url.origin !== self.location.origin) return;
 
-  // Auth/push API calls — always network, never cache
-  if (url.pathname.startsWith('/api/auth/') || url.pathname.startsWith('/api/push/')) {
-    return;
-  }
-
-  // API calls — network first, cache fallback
-  if (url.pathname.startsWith('/api/') || url.pathname.startsWith('/_next/data/')) {
-    event.respondWith(
-      fetch(request)
-        .then((response) => {
-          if (response.ok) {
-            const clone = response.clone();
-            caches.open(CACHE_NAME).then((cache) => cache.put(request, clone));
-          }
-          return response;
-        })
-        .catch(() =>
-          caches.match(request).then((cached) =>
-            cached || new Response(JSON.stringify({ error: 'Offline' }), {
-              status: 503,
-              headers: { 'Content-Type': 'application/json' },
-            })
-          )
-        )
-    );
-    return;
-  }
-
-  // Static assets — cache first, store on miss
+  // Immutable, content-hashed assets only — safe to cache-first.
   if (url.pathname.startsWith('/_next/static/') || url.pathname.startsWith('/icons/')) {
     event.respondWith(
-      caches.match(request).then((cached) => {
-        if (cached) return cached;
-        return fetch(request)
-          .then((response) => {
-            if (response.ok) {
-              const clone = response.clone();
-              caches.open(CACHE_NAME).then((cache) => cache.put(request, clone));
-            }
-            return response;
-          })
-          .catch(() => new Response('', { status: 503 }));
-      })
+      caches.match(request).then((cached) => cached || fetch(request).then((res) => {
+        if (res.ok) { const clone = res.clone(); caches.open(CACHE_NAME).then((c) => c.put(request, clone)); }
+        return res;
+      }).catch(() => new Response('', { status: 503 })))
     );
     return;
   }
 
-  // Pages — network first, cache fallback (only cache successful responses)
-  event.respondWith(
-    fetch(request)
-      .then((response) => {
-        if (response.ok) {
-          const clone = response.clone();
-          caches.open(CACHE_NAME).then((cache) => cache.put(request, clone));
-        }
-        return response;
-      })
-      .catch(() =>
-        caches.match(request).then((cached) =>
-          cached || new Response('Offline', { status: 503, headers: { 'Content-Type': 'text/html' } })
-        )
-      )
-  );
+  // EVERYTHING ELSE (documents, RSC/_next/data, /api, prefetch): do NOT
+  // respondWith. Let it hit the network.
+  return;
 });
 
 // Push notifications
