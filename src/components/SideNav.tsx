@@ -109,7 +109,7 @@ export function SideNav({ approvalCount, userName, userRole }: SideNavProps) {
               href={item.href}
               className={`flex items-center gap-3 rounded-[8px] px-3 py-2.5 text-sm transition-colors ${
                 isActive
-                  ? 'bg-[var(--primary)] bg-opacity-10 text-[var(--primary)] font-medium'
+                  ? 'bg-[var(--primary)] font-medium text-white'
                   : 'text-[var(--muted-foreground)] hover:bg-[var(--muted)] hover:text-[var(--foreground)]'
               }`}
             >
