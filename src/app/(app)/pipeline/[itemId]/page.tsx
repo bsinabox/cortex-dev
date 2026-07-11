@@ -204,7 +204,10 @@ export default async function ItemDetailPage(props: { params: Promise<{ itemId: 
 
       {/* ── KerTec ticket ── */}
       {ticketRef ? (
-        <div className="mt-3 rounded-[10px] border border-[var(--border)] bg-[var(--card)] p-3 sm:p-4">
+        <Link
+          href={`/tickets/${ticketRef}`}
+          className="mt-3 block rounded-[10px] border border-[var(--border)] bg-[var(--card)] p-3 transition-colors hover:border-[var(--primary)] sm:p-4"
+        >
           <p className="text-[9px] font-bold uppercase tracking-widest text-[var(--muted-foreground)]">KerTec Ticket</p>
           <div className="mt-1.5 flex flex-wrap items-center gap-2">
             <span className="inline-flex items-center rounded-[6px] bg-indigo-100 px-2 py-0.5 font-mono text-xs font-bold text-indigo-700 dark:bg-indigo-950 dark:text-indigo-300">
@@ -239,7 +242,7 @@ export default async function ItemDetailPage(props: { params: Promise<{ itemId: 
           {!ticket && (
             <p className="mt-1.5 text-[11px] text-[var(--muted-foreground)]">Ticket {ticketRef} not found.</p>
           )}
-        </div>
+        </Link>
       ) : (
         <div className="mt-3 flex items-center gap-1.5 px-1 text-[11px] text-[var(--muted-foreground)]">
           <span className="inline-block h-1.5 w-1.5 rounded-full bg-[var(--muted-foreground)] opacity-40" />

@@ -1,6 +1,7 @@
 'use client';
 
 import { useMemo, useState } from 'react';
+import Link from 'next/link';
 import { CollapsibleSection } from '@/components/CollapsibleSection';
 import { TICKET_PRIORITY_CONFIG, COVERAGE_STATUS_CONFIG } from '@/lib/constants';
 
@@ -216,7 +217,10 @@ function TicketRow({ row, workItems }: { row: CoverageRow; workItems: Record<str
   const covered = row.coverage_status !== 'uncovered';
 
   return (
-    <div className="rounded-[10px] border border-[var(--border)] bg-[var(--card)] p-3">
+    <Link
+      href={`/tickets/${row.ref}`}
+      className="block rounded-[10px] border border-[var(--border)] bg-[var(--card)] p-3 transition-colors hover:border-[var(--primary)]"
+    >
       <div className="flex items-start justify-between gap-2">
         <div className="min-w-0 flex-1">
           <div className="flex flex-wrap items-center gap-2">
@@ -266,6 +270,6 @@ function TicketRow({ row, workItems }: { row: CoverageRow; workItems: Record<str
           })}
         </div>
       )}
-    </div>
+    </Link>
   );
 }
