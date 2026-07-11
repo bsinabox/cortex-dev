@@ -1,6 +1,7 @@
 /// <reference lib="webworker" />
 
-const CACHE_NAME = 'cortex-dev-v1';
+const SW_VERSION = new URL(self.location.href).searchParams.get('v') || 'v1';
+const CACHE_NAME = 'cortex-dev-' + SW_VERSION;
 
 // Install — skip waiting (no pre-cache of SSR routes — they require auth)
 self.addEventListener('install', (event) => {

@@ -11,6 +11,10 @@ const csp = [
 
 const nextConfig: NextConfig = {
   reactStrictMode: true,
+  env: {
+    NEXT_PUBLIC_BUILD_ID:
+      process.env.VERCEL_GIT_COMMIT_SHA || process.env.VERCEL_DEPLOYMENT_ID || String(Date.now()),
+  },
   headers: async () => [
     {
       source: '/(.*)',
