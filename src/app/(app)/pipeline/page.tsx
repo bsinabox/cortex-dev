@@ -33,7 +33,7 @@ export default async function PipelinePage() {
 
   const { data: rawItems, error: itemErr } = await supabase
     .from('agentic_items')
-    .select('id, title, status, priority, repo, batch_id, execution_policy, component_id, updated_at, escalated_at, escalation_reason, current_round, assignee')
+    .select('id, title, status, priority, repo, batch_id, execution_policy, component_id, updated_at, escalated_at, escalation_reason, current_round, assignee, ticket_ref')
     .not('status', 'in', '(cancelled,failed)')
     .order('updated_at', { ascending: false });
 
@@ -63,6 +63,7 @@ export default async function PipelinePage() {
     escalation_reason: row.escalation_reason ?? null,
     current_round: row.current_round ?? 0,
     assignee: row.assignee ?? null,
+    ticket_ref: row.ticket_ref ?? null,
   }));
 
   const compMap = new Map<string, BuildComponent>();

@@ -22,6 +22,7 @@ export type PipelineItem = {
   execution_policy: string | null;
   component_id: string | null;
   assignee: string | null;
+  ticket_ref: string | null;
 };
 
 interface ItemCardProps {
