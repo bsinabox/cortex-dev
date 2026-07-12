@@ -8,6 +8,7 @@ import {
 } from '@/lib/constants';
 import { CollapsibleSection } from '@/components/CollapsibleSection';
 import { MessageCard } from '@/components/MessageCard';
+import { KertecTestLinks } from '@/components/KertecTestLinks';
 import { ItemDetailActions } from './ItemDetailActions';
 
 export const dynamic = 'force-dynamic';
@@ -355,6 +356,17 @@ export default async function ItemDetailPage(props: { params: Promise<{ itemId: 
           needsAction={needsAction}
         />
       </div>
+
+      {/* ── Test in KerTec (KerTec items only) ── */}
+      {item.repo === 'kertec-field-app-v2' && (
+        <div className="mt-3">
+          <KertecTestLinks
+            repo={item.repo}
+            status={item.status}
+            finalDesignSummary={typeof item.final_design_summary === 'string' ? item.final_design_summary : null}
+          />
+        </div>
+      )}
 
       {/* ── History sections ── */}
       {!hasData && (

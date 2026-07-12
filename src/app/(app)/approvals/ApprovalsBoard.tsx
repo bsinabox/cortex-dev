@@ -15,6 +15,7 @@ import {
   STATUS_TO_TRIGGER,
 } from '@/lib/learning';
 import type { ResolutionAction, TriggerType } from '@/lib/learning';
+import { KertecTestLinks } from '@/components/KertecTestLinks';
 import { approveWithResolution, rejectWithResolution } from './actions';
 
 type ApprovalItem = {
@@ -208,6 +209,18 @@ function ApprovalCard({ item }: { item: ApprovalItem }) {
           <p className="line-clamp-3 text-xs text-[var(--muted-foreground)]">
             {item.final_design_summary}
           </p>
+        </div>
+      )}
+
+      {/* Test in KerTec deep links (KerTec items only) */}
+      {item.repo === 'kertec-field-app-v2' && (
+        <div className="mt-3">
+          <KertecTestLinks
+            repo={item.repo}
+            status={item.status}
+            finalDesignSummary={item.final_design_summary}
+            variant="compact"
+          />
         </div>
       )}
 
