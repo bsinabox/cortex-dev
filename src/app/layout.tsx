@@ -1,17 +1,22 @@
 import type { Metadata, Viewport } from 'next';
+import { headers } from 'next/headers';
 import { ServiceWorkerRegistrar } from '@/components/ServiceWorkerRegistrar';
+import { brandLabelFromHost } from '@/lib/brand';
 import './globals.css';
 
-export const metadata: Metadata = {
-  title: 'Cortex Dev',
-  description: 'BS Solutions conductor operations',
-  manifest: '/manifest.json',
-  appleWebApp: {
-    capable: true,
-    statusBarStyle: 'default',
-    title: 'Cortex Dev',
-  },
-};
+export async function generateMetadata(): Promise<Metadata> {
+  const brand = brandLabelFromHost((await headers()).get('host'));
+  return {
+    title: brand,
+    description: 'BS Solutions conductor operations',
+    manifest: '/manifest.json',
+    appleWebApp: {
+      capable: true,
+      statusBarStyle: 'default',
+      title: brand,
+    },
+  };
+}
 
 export const viewport: Viewport = {
   themeColor: '#4F46E5',
