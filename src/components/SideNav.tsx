@@ -9,6 +9,7 @@ interface SideNavProps {
   approvalCount: number;
   userName: string;
   userRole: UserRole;
+  brand: string;
 }
 
 const navItems = [
@@ -78,7 +79,7 @@ const navItems = [
   },
 ];
 
-export function SideNav({ approvalCount, userName, userRole }: SideNavProps) {
+export function SideNav({ approvalCount, userName, userRole, brand }: SideNavProps) {
   const pathname = usePathname();
   const router = useRouter();
   const supabase = createBrowserClient();
@@ -96,7 +97,7 @@ export function SideNav({ approvalCount, userName, userRole }: SideNavProps) {
         <div className="flex h-8 w-8 items-center justify-center rounded-[8px] bg-[var(--primary)] text-sm font-bold text-white">
           C
         </div>
-        <span className="text-base font-semibold tracking-tight">Cortex Dev</span>
+        <span className="text-base font-semibold tracking-tight">{brand}</span>
       </div>
 
       {/* Nav items */}

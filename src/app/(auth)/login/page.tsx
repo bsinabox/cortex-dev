@@ -3,6 +3,7 @@
 import { useState, useEffect } from 'react';
 import { createBrowserClient } from '@/lib/supabase/client';
 import { useRouter } from 'next/navigation';
+import { brandLabelFromHost } from '@/lib/brand';
 
 type Mode = 'password' | 'magic' | 'forgot';
 
@@ -15,8 +16,16 @@ export default function LoginPage() {
   const [error, setError] = useState<string | null>(null);
   const [message, setMessage] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
+  // Defaults to "Cortex" for SSR/first paint, then resolves to the host-aware
+  // label on mount to keep hydration stable.
+  const [brand, setBrand] = useState('Cortex');
   const router = useRouter();
   const supabase = createBrowserClient();
+
+  // Resolve the host-aware wordmark on mount (window is client-only).
+  useEffect(() => {
+    setBrand(brandLabelFromHost(window.location.hostname));
+  }, []);
 
   // Load saved email on mount
   useEffect(() => {
@@ -133,7 +142,7 @@ export default function LoginPage() {
           </svg>
         </div>
         <h1 className="text-2xl font-semibold tracking-tight text-[var(--foreground)]">
-          Cortex Dev
+          {brand}
         </h1>
         <p className="mt-1 text-sm text-[var(--muted-foreground)]">
           {mode === 'forgot' ? 'Reset your password' : mode === 'magic' ? 'Sign in with a link' : 'Conductor Operations'}

@@ -1,7 +1,9 @@
 import { Suspense } from 'react';
+import { headers } from 'next/headers';
 import { redirect } from 'next/navigation';
 import { createServerClient } from '@/lib/supabase/server';
 import { getUserRole, getUserName } from '@/lib/auth';
+import { brandLabelFromHost } from '@/lib/brand';
 import { HUMAN_GATE_STATUSES } from '@/lib/constants';
 import { BottomNav } from '@/components/BottomNav';
 import { SideNav } from '@/components/SideNav';
@@ -22,6 +24,7 @@ export default async function AppLayout({
   if (!role) redirect('/login'); // Unknown user — deny access
 
   const userName = getUserName(user.id);
+  const brand = brandLabelFromHost((await headers()).get('host'));
 
   // Fetch approval badge count
   const { count } = await supabase
@@ -37,6 +40,7 @@ export default async function AppLayout({
         approvalCount={approvalCount}
         userName={userName}
         userRole={role}
+        brand={brand}
       />
 
       {/* Main content — offset for sidebar on desktop */}
@@ -47,7 +51,7 @@ export default async function AppLayout({
             <div className="flex h-7 w-7 items-center justify-center rounded-[6px] bg-[var(--primary)] text-xs font-bold text-white">
               C
             </div>
-            <span className="text-sm font-semibold tracking-tight">Cortex</span>
+            <span className="text-sm font-semibold tracking-tight">{brand}</span>
           </div>
           <NotificationBell />
         </div>
