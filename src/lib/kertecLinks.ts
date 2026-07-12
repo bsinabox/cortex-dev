@@ -18,7 +18,8 @@ export const KERTEC_REPO = 'kertec-field-app-v2';
 export const KERTEC_ENV_BASES = {
   dev: 'https://kertec-dev.bsinabox.com',
   uat: 'https://kertec-uat.bsinabox.com',
-  prod: 'https://kertec-prod.bsinabox.com',
+  // PROD primary domain. `kertec-prod.bsinabox.com` is an alias of this host.
+  prod: 'https://app.kertecllc.com',
 } as const;
 
 export type KertecEnv = keyof typeof KERTEC_ENV_BASES;
